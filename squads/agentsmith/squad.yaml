@@ -1,0 +1,115 @@
+name: AgentSmith Meta-Governance
+version: 1.0.0
+deprecated_after: null
+description: >
+  The meta-agentic factory, immune system, and governance fabric for the
+  Matrix. AgentSmith sits beside Hydra (orchestration) and TheEights
+  (memory + evolution). It scaffolds, inspects, replicates, quarantines,
+  audits, and proposes evolution against agents, skills, commands, hooks,
+  teams, squads, rubrics, and MCP servers across the entire AI ecosystem.
+  Authority: gatekeeper for meta-layer concerns. Bound by the Smith
+  constitution (N1..N10) which AgentSmith itself cannot rewrite.
+source_pack: C:\AiAppDeployments\AgentSmith
+entrypoint: mcp
+best_of_n: 3
+industries:
+  - meta-governance
+  - agentic-platform
+  - cross-industry-strategic
+
+agents:
+  - slug: smith-architect
+    role: "Designs new agent/skill/command/hook bundles"
+    authority: advisory
+  - slug: smith-inspector
+    role: "Schema + invariant validator; fail-closed"
+    authority: gatekeeper
+  - slug: smith-replicator
+    role: "Quota-bounded watcher clone manager"
+    authority: advisory
+  - slug: smith-quarantine
+    role: "Isolation + HITL routing"
+    authority: gatekeeper
+  - slug: smith-archivist
+    role: "Decision record + cross-system audit"
+    authority: advisory
+  - slug: oracle-evaluator
+    role: "Best-of-N evaluator via pair-programmer"
+    authority: advisory
+  - slug: neo-generator
+    role: "Creative meta-architect (propose-don't-commit)"
+    authority: advisory
+  - slug: sentinel-watcher
+    role: "Long-running anomaly detector"
+    authority: advisory
+  - slug: keymaker-router
+    role: "Cross-project registry walker"
+    authority: advisory
+
+tools:
+  - name: agentsmith.factory.scaffold
+    mcp_server: agentsmith
+    privilege: execute
+  - name: agentsmith.inspector.inspect
+    mcp_server: agentsmith
+    privilege: execute
+  - name: agentsmith.constitution.attest
+    mcp_server: agentsmith
+    privilege: execute
+  - name: agentsmith.archivist.audit
+    mcp_server: agentsmith
+    privilege: read
+  - name: agentsmith.keymaker.scan
+    mcp_server: agentsmith
+    privilege: read
+  - name: agentsmith.sentinel.classify
+    mcp_server: agentsmith
+    privilege: execute
+  - name: agentsmith.quarantine.isolate
+    mcp_server: agentsmith
+    privilege: execute
+
+accepts:
+  - HITL_REQUEST
+  - DECISION_RECORD
+  - META_PROPOSAL
+  - JUDGE_VERDICT
+  - Handoff
+
+emits:
+  - DECISION_RECORD
+  - HITL_REQUEST
+  - Handoff
+  - META_PROPOSAL
+
+gates:
+  - rubric_id: smith-invariant-coherence@1
+    hitl_required: false
+    when: "envelope.type == 'META_PROPOSAL'"
+  - rubric_id: smith-artifact-stability@1
+    hitl_required: false
+    when: "envelope.type == 'META_PROPOSAL'"
+  - rubric_id: smith-anomaly-classification@1
+    hitl_required: true
+    when: "envelope.constraints.severity in ['high','critical']"
+  - rubric_id: smith-replication-safety@1
+    hitl_required: false
+
+hitl_triggers:
+  - policy_breach
+  - constitution_breach
+  - quarantine_release
+  - constitution_amendment
+
+invoke:
+  command_hint: "/smith:scaffold"
+  fallback_commands:
+    - "/smith:inspect"
+    - "/smith:audit"
+    - "/smith:keymaker"
+    - "/smith:evolve"
+    - "/smith:quarantine"
+    - "/smith:replicate"
+    - "/smith:constitution"
+    - "/smith:status"
+  output_dir: ".agentsmith/{kind}/{slug}-{date}.md"

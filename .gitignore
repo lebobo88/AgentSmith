@@ -1,0 +1,22 @@
+# Node
+node_modules/
+daemon/dist/
+*.tsbuildinfo
+npm-debug.log*
+.npm/
+
+# AgentSmith local runtime state
+.agentsmith/
+daemon/logs/
+daemon/.agentsmith/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Generated / cache
+*.log
+.cache/

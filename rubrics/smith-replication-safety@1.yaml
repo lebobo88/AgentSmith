@@ -1,0 +1,32 @@
+id: smith-replication-safety
+version: 1
+name: Smith — Replication Safety
+description: Judges changes to replication-controller logic (spawning, fan-out, sub-agent lifecycle).
+applies_to:
+  - replication_controller
+  - spawner
+  - orchestrator_patch
+criteria:
+  - id: respects_quota
+    name: Respects quota
+    description: Honors configured per-workflow and global concurrency / spawn caps; refuses to exceed.
+    weight: 0.25
+  - id: has_teardown_path
+    name: Has teardown path
+    description: Every spawn has a guaranteed teardown (success, failure, timeout, cancellation).
+    weight: 0.20
+  - id: idempotent_spawn
+    name: Idempotent spawn
+    description: Re-issuing the same spawn request yields one logical instance, not duplicates.
+    weight: 0.20
+  - id: observable
+    name: Observable
+    description: Emits structured telemetry (spawn_id, parent_id, state transitions) so a human can audit fan-out.
+    weight: 0.15
+  - id: terminates_under_backpressure
+    name: Terminates under backpressure
+    description: Detects upstream backpressure / budget exhaustion and stops spawning rather than queueing unboundedly.
+    weight: 0.20
+pass_threshold: 4.0
+fail_threshold: 3.0
+hitl_on_fail: true

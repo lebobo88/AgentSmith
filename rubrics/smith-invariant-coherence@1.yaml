@@ -1,0 +1,32 @@
+id: smith-invariant-coherence
+version: 1
+name: Smith — Invariant Coherence
+description: Used to inspect proposed amendments or newly authored invariants for the Smith constitution.
+applies_to:
+  - invariant
+  - amendment
+  - constitution_patch
+criteria:
+  - id: contradicts_existing_invariants
+    name: Non-contradiction with existing invariants
+    description: Must NOT contradict any N1..Nk invariant currently in force. Score 5 = no contradiction; 1 = direct contradiction.
+    weight: 0.30
+  - id: traceable_to_external_governance
+    name: Traceable to external governance
+    description: Cites a concrete external anchor (NIST AI RMF, EU AI Act, ISO 42001, internal policy ID).
+    weight: 0.20
+  - id: falsifiable
+    name: Falsifiability
+    description: Stated such that a specific runtime observation could prove a violation; not aspirational prose.
+    weight: 0.20
+  - id: audit_logged_on_violation
+    name: Audit-logged on violation
+    description: Violations append a structured record to the decision log with timestamp, actor, evidence pointer.
+    weight: 0.15
+  - id: has_amendment_procedure
+    name: Has amendment procedure
+    description: Specifies how it can be amended/retired (who proposes, who ratifies, cooling-off period).
+    weight: 0.15
+pass_threshold: 4.0
+fail_threshold: 3.0
+hitl_on_fail: true

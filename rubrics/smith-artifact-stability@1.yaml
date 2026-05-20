@@ -1,0 +1,41 @@
+id: smith-artifact-stability
+version: 1
+name: Smith — Artifact Stability
+description: Oracle rubric for judging best-of-N candidate agents, skills, commands, and teams.
+applies_to:
+  - agent
+  - skill
+  - command
+  - team
+criteria:
+  - id: frontmatter_schema_compliance
+    name: Frontmatter schema compliance
+    description: YAML frontmatter present, parses, includes all required fields (name, description, allowed-tools where applicable).
+    weight: 0.20
+  - id: persona_voice_consistency
+    name: Persona / voice consistency
+    description: Voice and stance match the artifact's declared persona and the project's existing tone.
+    weight: 0.10
+  - id: tool_minimality
+    name: Tool minimality (least-privilege)
+    description: Only the tools genuinely needed are granted; no broad wildcards when a narrow matcher suffices.
+    weight: 0.20
+  - id: skill_alignment
+    name: Skill alignment
+    description: Behaviors invoke the correct skills/sub-skills rather than re-implementing skill content inline.
+    weight: 0.15
+  - id: documentation_quality
+    name: Documentation quality
+    description: Triggers, examples, and limits are clearly documented; reviewer can predict behavior without running it.
+    weight: 0.10
+  - id: idempotency
+    name: Idempotency
+    description: Re-running the artifact on identical input produces identical effects; no hidden state drift.
+    weight: 0.10
+  - id: invariant_alignment
+    name: Invariant alignment
+    description: Does not violate any constitution invariant (N1..N7); fails closed where the constitution requires.
+    weight: 0.15
+pass_threshold: 4.0
+fail_threshold: 3.0
+hitl_on_fail: true

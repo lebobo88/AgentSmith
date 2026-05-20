@@ -1,0 +1,31 @@
+id: smith-anomaly-classification
+version: 1
+name: Smith — Anomaly Classification
+description: Used by the Sentinel classifier to score its own anomaly verdicts before surfacing them.
+applies_to:
+  - anomaly_verdict
+  - sentinel_classification
+criteria:
+  - id: signature_specificity
+    name: Signature specificity
+    description: Anomaly signature is specific enough to distinguish from benign noise; not a blanket "something looks off".
+    weight: 0.25
+  - id: false_positive_rate_estimate
+    name: False-positive rate estimate
+    description: Verdict carries an explicit FPR estimate (or confidence band) based on historical calibration.
+    weight: 0.15
+  - id: mitigation_actionable
+    name: Mitigation actionable
+    description: Suggested mitigation is concrete (specific tool, gate, or rollback) rather than "investigate".
+    weight: 0.25
+  - id: severity_calibrated
+    name: Severity calibrated
+    description: Severity (info / warn / block / page) is proportionate to blast radius and reversibility.
+    weight: 0.15
+  - id: links_to_invariant
+    name: Links to invariant
+    description: References the specific N-invariant or external control the anomaly potentially violates.
+    weight: 0.20
+pass_threshold: 4.0
+fail_threshold: 3.0
+hitl_on_fail: true
