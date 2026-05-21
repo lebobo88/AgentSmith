@@ -9,6 +9,7 @@ export const ARTIFACT_KINDS = [
   "squad",
   "rubric",
   "mcp",
+  "adr",
 ] as const;
 
 export const ArtifactKindSchema = z.enum(ARTIFACT_KINDS);
