@@ -5,7 +5,10 @@
  * its `eights.*` MCP tools. Every method is degraded-by-default: if the bridge
  * isn't reachable, callers get a marker object back instead of an exception.
  */
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { McpClient, type BridgeLogger, type McpServerConfig } from "./mcp-client.js";
 
 export interface EightsBridgeOptions {
@@ -13,9 +16,37 @@ export interface EightsBridgeOptions {
   args?: string[];
   env?: Record<string, string>;
   logger?: BridgeLogger;
+  /** Override the on-disk spool dir. Defaults to ~/.agentsmith/eights-pending. */
+  spoolDir?: string;
 }
 
 const DEFAULT_EIGHTS_ENTRY = "C:/AiAppDeployments/TheEights/daemon/dist/index.js";
+
+/**
+ * Payload shape persisted to disk in the eights-pending spool.
+ *
+ * `args` is the original `evolutionPropose` input so replay can re-issue the
+ * exact same MCP call. `spooled_at` is set by the bridge on failure.
+ */
+interface SpooledProposal {
+  id: string;
+  tool: "eights.evolution.propose";
+  args: {
+    rid: string;
+    candidate_content: string;
+    justification: string;
+    evidence_memory_ids?: string[];
+  };
+  spooled_at: string;
+  reason: string;
+}
+
+/** Summary returned by replayPendingProposals(). */
+export interface ReplaySummary {
+  sent: number;
+  failed: number;
+  skipped: number;
+}
 
 export interface DegradedMarker {
   degraded: true;
@@ -29,6 +60,7 @@ function degraded<T extends Record<string, unknown>>(extra: T, reason: string): 
 export class EightsBridge {
   private readonly client: McpClient;
   private readonly log: BridgeLogger;
+  private readonly spoolDir: string;
 
   constructor(opts: EightsBridgeOptions = {}) {
     const command = opts.command ?? "node";
@@ -48,6 +80,109 @@ export class EightsBridge {
         error: (o, m) => console.error("[eights-bridge] ERROR", m ?? "", JSON.stringify(o)),
       } satisfies BridgeLogger);
     this.client = new McpClient(cfg, this.log);
+    this.spoolDir = opts.spoolDir ?? join(homedir(), ".agentsmith", "eights-pending");
+  }
+
+  /**
+   * Persist a failed eights.evolution.propose payload to the on-disk spool.
+   * Atomic write: stage to `<uuid>.json.partial` then rename to `<uuid>.json`.
+   * Fail-soft: any write error is logged and swallowed (the in-memory
+   * degraded marker is still returned to the caller).
+   */
+  private spoolProposal(
+    args: SpooledProposal["args"],
+    reason: string,
+  ): { spooled: true; id: string } | { spooled: false } {
+    try {
+      mkdirSync(this.spoolDir, { recursive: true });
+      const id = randomUUID();
+      const payload: SpooledProposal = {
+        id,
+        tool: "eights.evolution.propose",
+        args,
+        spooled_at: new Date().toISOString(),
+        reason,
+      };
+      const finalPath = join(this.spoolDir, `${id}.json`);
+      const partialPath = `${finalPath}.partial`;
+      writeFileSync(partialPath, JSON.stringify(payload, null, 2), "utf8");
+      renameSync(partialPath, finalPath);
+      this.log.warn(
+        { spoolDir: this.spoolDir, id, reason },
+        "spooled failed eights.evolution.propose for replay",
+      );
+      return { spooled: true, id };
+    } catch (err) {
+      this.log.error(
+        { err: String(err), spoolDir: this.spoolDir },
+        "failed to spool eights proposal — proposal will be lost",
+      );
+      return { spooled: false };
+    }
+  }
+
+  /**
+   * Drain the on-disk spool by re-issuing each pending proposal directly to
+   * the MCP child-process boundary (`this.client.call`). Successful sends
+   * delete the file; failures leave it for the next replay attempt; corrupt
+   * files don't block draining the rest (they are counted as `skipped`).
+   *
+   * Returns a {sent, failed, skipped} summary. Never throws.
+   */
+  async replayPendingProposals(): Promise<ReplaySummary> {
+    const summary: ReplaySummary = { sent: 0, failed: 0, skipped: 0 };
+    let entries: string[];
+    try {
+      if (!existsSync(this.spoolDir)) return summary;
+      entries = readdirSync(this.spoolDir).filter((f) => f.endsWith(".json"));
+    } catch (err) {
+      this.log.warn({ err: String(err), spoolDir: this.spoolDir }, "replay: readdir failed");
+      return summary;
+    }
+
+    for (const fname of entries) {
+      const fpath = join(this.spoolDir, fname);
+      let parsed: SpooledProposal;
+      try {
+        const raw = readFileSync(fpath, "utf8");
+        parsed = JSON.parse(raw) as SpooledProposal;
+      } catch (err) {
+        this.log.warn(
+          { err: String(err), file: fpath },
+          "replay: corrupt/unreadable spool file — skipping (left in place)",
+        );
+        summary.skipped += 1;
+        continue;
+      }
+      // Sanity: only replay propose payloads we recognise.
+      if (parsed.tool !== "eights.evolution.propose" || !parsed.args || !parsed.args.rid) {
+        this.log.warn({ file: fpath }, "replay: unknown payload shape — skipping");
+        summary.skipped += 1;
+        continue;
+      }
+      try {
+        await this.client.call<{ proposal_id?: string; auto_committed?: boolean }>(
+          "eights.evolution.propose",
+          parsed.args,
+        );
+        try {
+          unlinkSync(fpath);
+        } catch (unlinkErr) {
+          this.log.warn(
+            { err: String(unlinkErr), file: fpath },
+            "replay: send succeeded but unlink failed — may double-send on next replay",
+          );
+        }
+        summary.sent += 1;
+      } catch (err) {
+        this.log.warn(
+          { err: String(err), file: fpath },
+          "replay: re-send failed — leaving for next attempt",
+        );
+        summary.failed += 1;
+      }
+    }
+    return summary;
   }
 
   available(): Promise<boolean> {
@@ -95,8 +230,26 @@ export class EightsBridge {
     evidence_memory_ids?: string[];
   }): Promise<
     | { proposal_id: string; auto_committed: boolean }
-    | (DegradedMarker & { proposal_id: string; auto_committed: boolean })
+    | (DegradedMarker & { proposal_id: string; auto_committed: boolean; spooled_id?: string })
   > {
+    // Drain any prior degraded proposals first (fail-soft — never blocks the
+    // new propose). The next successful propose effectively flushes the spool.
+    try {
+      const summary = await this.replayPendingProposals();
+      if (summary.sent > 0 || summary.failed > 0 || summary.skipped > 0) {
+        this.log.warn(
+          {
+            sent: summary.sent,
+            failed: summary.failed,
+            skipped: summary.skipped,
+          },
+          "eights spool replay summary",
+        );
+      }
+    } catch (err) {
+      this.log.warn({ err: String(err) }, "spool replay threw — proceeding with new propose");
+    }
+
     try {
       const r = await this.client.call<{ proposal_id?: string; auto_committed?: boolean }>(
         "eights.evolution.propose",
@@ -108,10 +261,12 @@ export class EightsBridge {
       };
     } catch (err) {
       this.log.warn({ err: String(err), tool: "eights.evolution.propose" }, "degraded");
-      return degraded(
+      const spoolResult = this.spoolProposal(input, "eights-mcp-unavailable");
+      const base = degraded(
         { proposal_id: "degraded", auto_committed: false },
         "eights-mcp-unavailable",
       );
+      return spoolResult.spooled ? { ...base, spooled_id: spoolResult.id } : base;
     }
   }
 
