@@ -15,7 +15,14 @@ export const ARTIFACT_KINDS = [
 export const ArtifactKindSchema = z.enum(ARTIFACT_KINDS);
 export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
 
-export const ConsumerProjectSchema = z.enum([
+/**
+ * Known camelCase project slugs that resolve to legacy `cfg.consumerRoots`
+ * entries. Kept as a literal list for back-compat (callers/types depending on
+ * these names still work) but the schema below is widened to accept any
+ * kebab-case slug so brand-new consumer projects can be scaffolded without
+ * an enum edit.
+ */
+export const KNOWN_CONSUMER_PROJECTS = [
   "hydra",
   "eights",
   "executiveSuite",
@@ -23,7 +30,27 @@ export const ConsumerProjectSchema = z.enum([
   "rlmCreative",
   "pairProgrammer",
   "agentSmith",
-]);
+] as const;
+export type KnownConsumerProject = (typeof KNOWN_CONSUMER_PROJECTS)[number];
+
+/**
+ * ConsumerProjectSchema accepts:
+ *   - The legacy camelCase names in KNOWN_CONSUMER_PROJECTS (back-compat).
+ *   - Any kebab-case slug starting with a letter (e.g. "rlm-platform",
+ *     "consumer-project-x"). The factory resolves these to
+ *     `C:\AiAppDeployments\<slug>` if no explicit `consumerRoots[<slug>]`
+ *     is configured.
+ *
+ * The regex blocks injection / path-traversal nonsense (no slashes, dots,
+ * backslashes, or uppercase letters).
+ */
+export const ConsumerProjectSchema = z
+  .string()
+  .min(1)
+  .regex(
+    /^([a-z][a-z0-9-]+|[a-z][a-zA-Z0-9]*)$/,
+    "project slug must be kebab-case starting with a letter, OR a known camelCase project name",
+  );
 export type ConsumerProject = z.infer<typeof ConsumerProjectSchema>;
 
 export const ArtifactDraftSchema = z.object({

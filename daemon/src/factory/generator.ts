@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ArtifactKind,
@@ -9,6 +10,74 @@ import {
 import type { AgentSmithConfig } from "../config.js";
 import { resolveTemplate } from "./templates/index.js";
 import { renderMarkdown, type RiskClass, type TemplateOptions } from "./templates/types.js";
+
+/** Platform-appropriate default root for ad-hoc consumer projects. Read at
+ *  call-time (not module-load) so tests can override via env. */
+function defaultConsumerBase(): string {
+  return process.env["AGENTSMITH_CONSUMER_BASE"] ?? "C:/AiAppDeployments";
+}
+
+/** Signals that mark a directory as a real consumer project root. */
+const CONSUMER_PROJECT_SIGNALS = [".claude", "AGENTS.md", "CLAUDE.md"] as const;
+
+/**
+ * Resolve the on-disk root for a consumer project slug.
+ *
+ * Resolution order:
+ *   1. Explicit entry in `cfg.consumerRoots` (back-compat for the 7 legacy
+ *      camelCase names: hydra, eights, executiveSuite, marketBliss,
+ *      rlmCreative, pairProgrammer, agentSmith).
+ *   2. Fallback: `<DEFAULT_CONSUMER_ROOTS_BASE>/<slug>` (default
+ *      `C:/AiAppDeployments/<slug>`). The resolved directory must EXIST
+ *      and contain at least one of `.claude/`, `AGENTS.md`, or `CLAUDE.md`
+ *      — otherwise a clear error is thrown listing all three signals.
+ *
+ * Throws on:
+ *   - resolved path does not exist
+ *   - resolved path exists but is not a directory
+ *   - resolved path is a directory but contains none of the required signals
+ */
+export function resolveConsumerRoot(
+  cfg: AgentSmithConfig,
+  project: ConsumerProject,
+): string {
+  const explicit = cfg.consumerRoots[project];
+  if (explicit) return explicit;
+
+  const fallback = join(defaultConsumerBase(), project).replace(/\\/g, "/");
+  if (!existsSync(fallback)) {
+    throw new Error(
+      `unknown consumer project: "${project}" — no entry in cfg.consumerRoots and ` +
+        `fallback path "${fallback}" does not exist. Either register the project ` +
+        `via AGENTSMITH_CONSUMER_BASE/<slug>, or add it to cfg.consumerRoots.`,
+    );
+  }
+  let st;
+  try {
+    st = statSync(fallback);
+  } catch (err) {
+    throw new Error(
+      `consumer project "${project}" path "${fallback}" stat failed: ${String(err)}`,
+    );
+  }
+  if (!st.isDirectory()) {
+    throw new Error(
+      `consumer project "${project}" path "${fallback}" is not a directory`,
+    );
+  }
+  const hasSignal = CONSUMER_PROJECT_SIGNALS.some((sig) =>
+    existsSync(join(fallback, sig)),
+  );
+  if (!hasSignal) {
+    throw new Error(
+      `consumer project "${project}" path "${fallback}" is missing all of the ` +
+        `required signals: ${CONSUMER_PROJECT_SIGNALS.join(", ")}. At least one ` +
+        `must exist to confirm this is a real consumer project (and not a ` +
+        `mistyped slug or unrelated directory).`,
+    );
+  }
+  return fallback;
+}
 
 export interface ScaffoldInput {
   kind: ArtifactKind;
@@ -37,8 +106,7 @@ export class Factory {
     if (!ARTIFACT_KINDS.includes(input.kind)) {
       throw new Error(`unknown artifact kind: ${input.kind}`);
     }
-    const projectRoot = this.cfg.consumerRoots[input.project];
-    if (!projectRoot) throw new Error(`unknown consumer project: ${input.project}`);
+    const projectRoot = resolveConsumerRoot(this.cfg, input.project);
 
     const { fn, fromGeneric } = resolveTemplate(input.project, input.kind);
     if (fromGeneric) {
