@@ -2,6 +2,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod";
+import { zodToJsonSchema } from "./zod-to-json.js";
 
 export interface ToolDefinition {
   name: string;
@@ -11,13 +12,6 @@ export interface ToolDefinition {
 }
 
 export type ToolMap = Map<string, ToolDefinition>;
-
-function zodToJsonSchema(_schema: z.ZodTypeAny): Record<string, unknown> {
-  // Minimal placeholder — the MCP SDK does not strictly require a full JSON Schema
-  // and any production deployment should swap in zod-to-json-schema. Returning a
-  // permissive object schema keeps tool discovery functional in Phase 0.
-  return { type: "object" };
-}
 
 export async function startMcpServer(tools: ToolMap, version = "0.1.0"): Promise<void> {
   const server = new Server(
