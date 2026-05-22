@@ -339,6 +339,45 @@ export class EightsBridge {
     }
   }
 
+  /**
+   * R3-tail post-mortem Fix 2.3 (2026-05-21): cross-project envelope lookup.
+   *
+   * Look up an envelope/attempt id in TheEights' shared ledger via the
+   * audit trace. Returns true if the eights daemon recognizes the id
+   * (typically because Hydra emitted an `envelope_record` event for it
+   * earlier in the workflow), false otherwise.
+   *
+   * Background: during R3-tail recovery, smith-archivist seal of
+   * DR-2026-018 was deferred because `agentsmith.eights.*` tools returned
+   * "attempt not found" — AgentSmith's local ledger doesn't have the
+   * envelope_id Hydra had created. The fix is to look up via the shared
+   * eights ledger (which both Hydra and AgentSmith write to) before
+   * declaring an attempt unknown. This lets smith-archivist seal a
+   * Hydra-originated DR even though AgentSmith never saw the envelope
+   * directly.
+   *
+   * Fail-soft: returns false on any bridge error (the caller decides
+   * whether to surface "not found" or to continue degraded).
+   */
+  async lookupEnvelopeAttempt(attempt_id: string): Promise<{ found: boolean; via_kinds: string[] }> {
+    try {
+      const out = await this.auditTrace({ trace_id: attempt_id, limit: 5 });
+      if ((out as DegradedMarker).degraded) {
+        return { found: false, via_kinds: [] };
+      }
+      const events = (out as { events: Array<{ kind: string }> }).events ?? [];
+      if (events.length === 0) {
+        return { found: false, via_kinds: [] };
+      }
+      return {
+        found: true,
+        via_kinds: [...new Set(events.map(e => e.kind).filter(Boolean))],
+      };
+    } catch {
+      return { found: false, via_kinds: [] };
+    }
+  }
+
   async auditTrace(input: {
     trace_id?: string;
     scope?: string;

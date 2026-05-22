@@ -302,6 +302,18 @@ export function registerTools(kernel: SmithKernel): ToolMap {
       },
     },
     {
+      name: "agentsmith.eights.lookup_envelope_attempt",
+      description:
+        "R3-tail post-mortem Fix 2.3: look up an envelope/attempt id in TheEights' shared ledger before declaring it 'not found'. Returns {found: boolean, via_kinds: []}. Use this from smith-archivist seal flows that need to confirm a Hydra-originated envelope exists in the shared ledger before sealing — R3-tail DR-2026-018 was deferred because this path didn't exist and the local ledger didn't know about Hydra's envelopes.",
+      inputSchema: z.object({
+        attempt_id: z.string(),
+      }),
+      handler: async (args) => {
+        const a = args as { attempt_id: string };
+        return kernel.eights.lookupEnvelopeAttempt(a.attempt_id);
+      },
+    },
+    {
       name: "agentsmith.hydra.squad_list",
       description: "List Hydra squads via the Hydra bridge (hydra.squad.list).",
       inputSchema: z.object({}),
