@@ -2,7 +2,7 @@
 
 Two surfaces:
 
-1. **Project-local** — the repo's own `.claude/` is auto-discovered when you launch Claude Code inside `C:\AiAppDeployments\AgentSmith`. No install needed. Useful for developing AgentSmith itself.
+1. **Project-local** — the repo's own `.claude/` is auto-discovered when you launch Claude Code inside the AgentSmith repository root. No install needed. Useful for developing AgentSmith itself.
 
 2. **User-scope** (recommended) — symlink `.claude/{agents,skills,commands/smith}` into `~/.claude/` so `/smith:*` and `mcp__agentsmith__*` are available in **every** project. This is what the installer does.
 
@@ -16,7 +16,7 @@ Two surfaces:
 ## Install
 
 ```powershell
-pwsh -NoProfile -File C:/AiAppDeployments/AgentSmith/scripts/install-user-scope.ps1
+pwsh -NoProfile -File ./scripts/install-user-scope.ps1
 ```
 
 Or, from within any Claude Code session: `/smith:install`.
@@ -47,7 +47,7 @@ From any Claude Code session in any project:
 ## Update
 
 ```powershell
-cd C:/AiAppDeployments/AgentSmith
+cd <repo-root>
 git pull
 cd daemon && npm run build
 ```
@@ -59,10 +59,10 @@ If copy fallback was used (manifest says `"symlink_capable": false`), re-run the
 ## Uninstall
 
 ```powershell
-pwsh -NoProfile -File C:/AiAppDeployments/AgentSmith/scripts/uninstall-user-scope.ps1
+pwsh -NoProfile -File ./scripts/uninstall-user-scope.ps1
 ```
 
-Or `/smith:uninstall`. Removes every symlink/copy, strips Smith hooks from settings, removes the permission entry, unregisters the MCP server. The repo at `C:\AiAppDeployments\AgentSmith` is left untouched.
+Or `/smith:uninstall`. Removes every symlink/copy, strips Smith hooks from settings, removes the permission entry, unregisters the MCP server. The AgentSmith repository is left untouched.
 
 Flags: `--keep-mcp` to keep the MCP server registered, `--keep-settings` to keep the hooks block as-is.
 

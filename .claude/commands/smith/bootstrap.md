@@ -14,15 +14,15 @@ Idempotent bootstrap. Safe to re-run.
 
 1. Probe whether the agentsmith MCP server is already registered (`claude mcp list`). If not, instruct the user to run:
    ```
-   claude mcp add agentsmith --scope user -- node C:/AiAppDeployments/AgentSmith/daemon/dist/index.js
+   claude mcp add agentsmith --scope user -- node <repo-root>/daemon/dist/index.js
    ```
    (We do not run this for them — MCP add prompts the user and is an authorization event.)
 
 2. If `--link-project=<root>` is supplied, propose copying the four most useful Smith agents (smith-inspector, smith-archivist, sentinel-watcher, keymaker-router) into the target project's `.claude/agents/` and the `matrix-invariants` + `cross-project-conventions` skills into `.claude/skills/`. **Do not write** without explicit user confirmation in the next turn — surface the proposed file list first.
 
-3. Verify the daemon build artifact exists (`C:/AiAppDeployments/AgentSmith/daemon/dist/index.js`). If absent, instruct the user:
+3. Verify the daemon build artifact exists (`<repo-root>/daemon/dist/index.js`). If absent, instruct the user:
    ```
-   cd C:/AiAppDeployments/AgentSmith/daemon
+   cd <repo-root>/daemon
    npm install && npm run build
    ```
 

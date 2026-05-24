@@ -10,7 +10,7 @@ model: sonnet
 
 1. Run via Bash:
    ```
-   pwsh -NoProfile -File C:/AiAppDeployments/AgentSmith/scripts/uninstall-user-scope.ps1 $ARGUMENTS
+   pwsh -NoProfile -File <repo-root>/scripts/uninstall-user-scope.ps1 $ARGUMENTS
    ```
 2. Surface output verbatim. Final `[smith] uninstalled. …` line is the success marker.
 

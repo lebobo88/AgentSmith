@@ -8,7 +8,7 @@ allowed-tools: Read, Grep, Glob
 
 > "Never send a human to do a machine's job. But never let a machine forget the rules either."
 
-The canonical source of truth is `C:\AiAppDeployments\AgentSmith\daemon\src\constitution\smith-constitution.md`. This skill is the cited reference surface. If the daemon file and this skill diverge, **the daemon wins** and a `constitution-hash-mismatch` anomaly MUST be raised.
+The canonical source of truth is `daemon/src/constitution/smith-constitution.md`. This skill is the cited reference surface. If the daemon file and this skill diverge, **the daemon wins** and a `constitution-hash-mismatch` anomaly MUST be raised.
 
 ## The 10 Invariants
 

@@ -34,10 +34,10 @@ AgentSmith is one daemon, four cooperating subsystems. Every pillar is fail-clos
         +---------+-----------+-----------+-----------+---------+-----------+
                   |                       |                     |
                   v                       v                     v
-            templates/              rubrics/             .smith/quarantine/
-            forges artifacts        smith-artifact-      audit.jsonl
-            into target project     stability@1, ...     decision-records/
-                                                         constitution.hash
+    daemon/src/factory/     rubrics/             .smith/quarantine/
+    templates/              smith-artifact-      audit.jsonl
+    forges artifacts        stability@1, ...     decision-records/
+    into target project                          constitution.hash
 ```
 
 **Data flow per artifact lifecycle:**
@@ -138,7 +138,7 @@ governance.enforce_governance
 Hydra discovers AgentSmith as a squad through standard registry resolution:
 
 ```
-C:/AiAppDeployments/AgentSmith/squads/agentsmith/squad.yaml
+squads/agentsmith/squad.yaml
 ```
 
 The squad routes any goal whose keywords match governance, validation, audit, replication, or constitution to Smith's four pillars in order: Factory → Inspector → Sentinel → Archivist.
@@ -223,15 +223,15 @@ losers archived (Archivist)
 AgentSmith ships rubrics under `rubrics/`:
 
 - `smith-artifact-stability@1` — schema compliance, idempotency, invariant adherence
-- `smith-hook-safety@1` — pre/post-tool hooks must not loop, must terminate, must not bypass other Smith hooks
-- `smith-skill-determinism@1` — skill outputs reproducible given same inputs
-- `smith-replication-bound@1` — generated agents/squads respect N5 cap
+- `smith-anomaly-classification@1` — anomaly detection scoring and signature matching
+- `smith-invariant-coherence@1` — constitution amendment coherence
+- `smith-replication-safety@1` — replication quota safety, generated agents/squads respect N5 cap
 
 ---
 
 ## 6. Consumer Projects
 
-The six sibling projects under `C:\AiAppDeployments\` are AgentSmith's governance domain. Each gets:
+The six [sibling projects](https://github.com/lebobo88) are AgentSmith's governance domain. Each gets:
 
 1. **A pre-tool hook** installed in `.claude/hooks/` that calls `agentsmith.inspector.validate` before any write-shaped tool call to `.claude/*`.
 2. **A `/smith:*` command surface** wired through the user-scope MCP registration.

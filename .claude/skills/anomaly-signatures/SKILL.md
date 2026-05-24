@@ -74,7 +74,7 @@ The catalog of named patterns Smith and its clones are trained to recognize. Eac
 
 ## Detector wiring
 
-Detectors live in `C:\AiAppDeployments\AgentSmith\daemon\src\detectors\<slug>.py` and register against the watcher loop. Each detector:
+Detectors live in `daemon/src/detectors/<slug>.py` and register against the watcher loop. Each detector:
 
 1. Subscribes to one or more event streams (envelope_in, envelope_out, tool_invoke, file_write, audit_emit).
 2. Emits a `Detection` with `{signature, severity, evidence, scope, suggested_action}`.

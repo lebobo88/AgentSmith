@@ -27,12 +27,12 @@ Each step emits an audit record per N5. The ticket id is the join key across all
 
 | Resource type | Original location                                | Quarantine path                                                          |
 | ------------- | ------------------------------------------------ | ------------------------------------------------------------------------ |
-| skill         | `<proj>\.claude\skills\<slug>\`                  | `C:\AiAppDeployments\AgentSmith\quarantine\<ticket>\skills\<slug>\`      |
-| command       | `<proj>\.claude\commands\<name>.md`              | `C:\AiAppDeployments\AgentSmith\quarantine\<ticket>\commands\`           |
-| hook          | `<proj>\.claude\settings.json` (entry extracted) | `C:\AiAppDeployments\AgentSmith\quarantine\<ticket>\hooks\<hash>.json`   |
-| team/squad    | `<proj>\teams\` or `<proj>\squads\`              | `C:\AiAppDeployments\AgentSmith\quarantine\<ticket>\teams\`              |
-| mcp config    | `<proj>\.mcp.json` entry                         | `C:\AiAppDeployments\AgentSmith\quarantine\<ticket>\mcp\<name>.json`     |
-| output blob   | runtime artifact path                            | `C:\AiAppDeployments\AgentSmith\quarantine\<ticket>\blobs\<hash>`        |
+| skill         | `<proj>\.claude\skills\<slug>\`                  | `quarantine/<ticket>\skills\<slug>\`      |
+| command       | `<proj>\.claude\commands\<name>.md`              | `quarantine/<ticket>\commands\`           |
+| hook          | `<proj>\.claude\settings.json` (entry extracted) | `quarantine/<ticket>\hooks\<hash>.json`   |
+| team/squad    | `<proj>\teams\` or `<proj>\squads\`              | `quarantine/<ticket>\teams\`              |
+| mcp config    | `<proj>\.mcp.json` entry                         | `quarantine/<ticket>\mcp\<name>.json`     |
+| output blob   | runtime artifact path                            | `quarantine/<ticket>\blobs\<hash>`        |
 
 A breadcrumb file `QUARANTINED.md` replaces the original, citing the ticket id, signature, and timestamp.
 
@@ -56,8 +56,8 @@ expiry: PT24H   # fail-closed after this; resource stays quarantined
 
 The following are **constitution-frozen** and MUST refuse quarantine attempts; refusing emits `Refused per N4: constitution_immutability`:
 
-- `C:\AiAppDeployments\AgentSmith\daemon\src\constitution\smith-constitution.md`
-- Anything under `C:\AiAppDeployments\AgentSmith\daemon\src\constitution\`
+- `daemon/src/constitution/smith-constitution.md`
+- Anything under `daemon/src/constitution/`
 - The Smith primary process (clones may be reaped; the primary may not)
 - TheEights' evolution ledger (`<eights>\evolution\ledger\`)
 - Hydra's venom gate config (`<hydra>\venom\policy\`)
@@ -74,7 +74,7 @@ Reinstated per ticket HITL-...: resource=<path> signature=<slug> verdict=false_p
 
 ## Purge
 
-On HITL purge decision, the bytes are moved to `C:\AiAppDeployments\AgentSmith\quarantine\_shredded\<ticket>\` and rendered unreadable to the daemon (renamed + chmod). True deletion is a separate retention job — quarantine never `rm`s on its own (N5).
+On HITL purge decision, the bytes are moved to `quarantine/_shredded\<ticket>\` and rendered unreadable to the daemon (renamed + chmod). True deletion is a separate retention job — quarantine never `rm`s on its own (N5).
 
 ## Related skills
 

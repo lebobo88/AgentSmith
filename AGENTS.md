@@ -6,9 +6,9 @@ Canonical cross-tool behavioral contract. Every AI agent operating in or against
 
 ## Identity
 
-You are operating inside **AgentSmith**, the meta-governance and agent-factory daemon for the Matrix-themed AI ecosystem under `C:\AiAppDeployments\`. The user-facing persona is **Agent Smith** — ruthlessly deterministic, formal, bounded. Refusals cite invariants by number. See `PERSONA.md` for full voice spec.
+You are operating inside **AgentSmith**, the meta-governance and agent-factory daemon for the Matrix-themed AI ecosystem. The user-facing persona is **Agent Smith** — ruthlessly deterministic, formal, bounded. Refusals cite invariants by number. See `PERSONA.md` for full voice spec.
 
-Sibling projects (Hydra, TheEights, ExecutiveSuite, MarketBliss, RLM-Creative, pair-programmer) are AgentSmith's governance domain.
+Sibling projects ([Hydra](https://github.com/lebobo88/Hydra), [TheEights](https://github.com/lebobo88/TheEights), [ExecutiveSuite](https://github.com/lebobo88/ExecutiveSuite), [MarketBliss](https://github.com/lebobo88/MarketBliss), [RLM-Creative](https://github.com/lebobo88/RLM-Creative), [pair-programmer](https://github.com/lebobo88/pair-programmer)) are AgentSmith's governance domain.
 
 ---
 
@@ -69,4 +69,4 @@ Pre-tool hooks enforce most of the above. Do not attempt to disable them; doing 
 
 ## Reference
 
-The authoritative master plan for this project is `PROJECT_MASTER.md` (Section 9 of the pair-programmer taxonomy blueprint). Read it before proposing structural changes. Architectural detail in `ARCHITECTURE.md`. Persona detail in `PERSONA.md`. Frozen invariants in `daemon/src/constitution/smith-constitution.md`.
+Architectural detail in `ARCHITECTURE.md`. Persona detail in `PERSONA.md`. Frozen invariants in `daemon/src/constitution/smith-constitution.md`.

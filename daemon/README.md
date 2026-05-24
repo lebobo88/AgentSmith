@@ -5,7 +5,7 @@ TypeScript MCP server that hosts the AgentSmith kernel: Factory + Inspector + Se
 ## Build
 
 ```powershell
-cd C:\AiAppDeployments\AgentSmith\daemon
+cd daemon
 npm install
 npm run build
 ```
@@ -13,7 +13,7 @@ npm run build
 ## Register as MCP server (user scope)
 
 ```powershell
-claude mcp add agentsmith --scope user -- node C:/AiAppDeployments/AgentSmith/daemon/dist/index.js
+claude mcp add agentsmith --scope user -- node ./dist/index.js
 ```
 
 ## Phase 0 surface

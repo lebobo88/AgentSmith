@@ -10,7 +10,7 @@ The 8 artifact kinds Smith manufactures, validates, and ships across the 6 sibli
 
 **Sibling projects**: Hydra, TheEights, ExecutiveSuite, MarketBliss, RLM-Creative, pair-programmer.
 
-**Common root**: `C:\AiAppDeployments\<Project>\`.
+**Common root**: Each sibling project's repository root (see [ecosystem](https://github.com/lebobo88)).
 
 ## Default evolution risk class per kind
 
@@ -107,7 +107,7 @@ Validators: capability_class ∈ {read_only, read_write, network, exec}; `exec` 
 ## Templates the daemon reads
 
 ```
-C:\AiAppDeployments\AgentSmith\daemon\src\factory\templates\
+daemon/src/factory/templates/
    agent.template.yaml
    skill.template.md
    command.template.md
