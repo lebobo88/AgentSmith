@@ -27,8 +27,13 @@ export function startEightsTail(
 
   const tails = new Map<string, { stop: () => void }>();
   let stopped = false;
+  // The first scan happens at daemon boot: files already on disk hold history
+  // (the events dir can be hundreds of MB) and MUST be tailed from EOF, never
+  // replayed synchronously. Files that first appear in a *later* scan are new
+  // (start small) and are read from offset 0.
+  let firstScan = true;
 
-  const attach = (filePath: string): void => {
+  const attach = (filePath: string, seekToEnd: boolean): void => {
     if (tails.has(filePath)) return;
     try {
       const t = tailJsonlFile(filePath, (record) => {
@@ -46,7 +51,7 @@ export function startEightsTail(
         } catch (err) {
           onError(err);
         }
-      });
+      }, { seekToEnd });
       tails.set(filePath, t);
     } catch (err) {
       onError(err);
@@ -63,6 +68,7 @@ export function startEightsTail(
       onError(err);
       return;
     }
+    const seekToEnd = firstScan;
     for (const name of entries) {
       if (!name.endsWith(".jsonl")) continue;
       const full = join(root, name);
@@ -72,8 +78,9 @@ export function startEightsTail(
       } catch {
         continue;
       }
-      if (!tails.has(full)) attach(full);
+      if (!tails.has(full)) attach(full, seekToEnd);
     }
+    firstScan = false;
   };
 
   scan();

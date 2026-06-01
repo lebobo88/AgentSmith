@@ -28,8 +28,11 @@ export function startHydraTail(
 
   const tails = new Map<string, { stop: () => void }>();
   let stopped = false;
+  // First scan = boot: pre-existing trace.jsonl files hold history and are
+  // tailed from EOF; workflow dirs appearing later are new and read from 0.
+  let firstScan = true;
 
-  const attach = (workflowId: string, tracePath: string): void => {
+  const attach = (workflowId: string, tracePath: string, seekToEnd: boolean): void => {
     if (tails.has(tracePath)) return;
     try {
       const t = tailJsonlFile(tracePath, (record) => {
@@ -48,7 +51,7 @@ export function startHydraTail(
         } catch (err) {
           onError(err);
         }
-      });
+      }, { seekToEnd });
       tails.set(tracePath, t);
     } catch (err) {
       onError(err);
@@ -65,6 +68,7 @@ export function startHydraTail(
       onError(err);
       return;
     }
+    const seekToEnd = firstScan;
     for (const name of entries) {
       const dir = join(root, name);
       try {
@@ -74,8 +78,9 @@ export function startHydraTail(
         continue;
       }
       const trace = join(dir, "trace.jsonl");
-      if (!tails.has(trace)) attach(name, trace);
+      if (!tails.has(trace)) attach(name, trace, seekToEnd);
     }
+    firstScan = false;
   };
 
   scan();

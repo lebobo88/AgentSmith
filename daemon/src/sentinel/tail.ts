@@ -8,11 +8,21 @@ import { existsSync, statSync, openSync, readSync, closeSync, watch, type FSWatc
  *  - truncation (offset > size triggers reset to 0)
  *  - rotation (inode/size jump — reset and re-read from start of the new file)
  *  - malformed lines (skipped, never throws into the hot path)
+ *
+ * `opts.seekToEnd` (default false): when true, the initial attach seeds the
+ * read offset to the file's *current* size instead of 0, so pre-existing
+ * historical content is NOT replayed (true `tail -f` semantics). Only bytes
+ * appended after attach are emitted. This is essential for boot safety: a
+ * sentinel attaching to a multi-hundred-MB event log must not read+parse the
+ * whole file synchronously on the event loop. The size is captured BEFORE the
+ * watcher is wired so bytes appended during attach are still consumed.
  */
 export function tailJsonlFile(
   path: string,
-  onLine: (record: unknown) => void
+  onLine: (record: unknown) => void,
+  opts: { seekToEnd?: boolean } = {}
 ): { stop: () => void } {
+  const seekToEnd = opts.seekToEnd ?? false;
   let offset = 0;
   let buffer = "";
   let watcher: FSWatcher | null = null;
@@ -79,6 +89,17 @@ export function tailJsonlFile(
     if (stopped || watcher) return;
     if (!existsSync(path)) return;
     try {
+      // Capture size BEFORE wiring the watcher so any bytes appended between
+      // this measurement and the first watcher fire are still consumed by the
+      // readNew() below (no append-during-attach gap).
+      let startOffset = 0;
+      if (seekToEnd) {
+        try {
+          startOffset = statSync(path).size;
+        } catch {
+          startOffset = 0;
+        }
+      }
       watcher = watch(path, { persistent: false }, () => {
         readNew();
       });
@@ -90,8 +111,10 @@ export function tailJsonlFile(
         }
         watcher = null;
       });
-      // initial read of current contents — start from 0
-      offset = 0;
+      // Seed the offset: from current EOF (seekToEnd — skip pre-existing
+      // history) or from 0 (replay current contents). readNew() then consumes
+      // everything past startOffset, including bytes appended during attach.
+      offset = startOffset;
       buffer = "";
       readNew();
     } catch {

@@ -66,20 +66,14 @@ async function main(): Promise<void> {
   const pp = new PpBridge({ logger: bridgeLogger });
   const consumer = new ConsumerBridge(cfg);
 
-  // Probe each bridge with a 1s deadline; never fail startup if unavailable.
-  await Promise.allSettled(
-    [
-      { name: "eights", probe: eights.available() },
-      { name: "hydra", probe: hydra.available() },
-      { name: "pp", probe: pp.available() },
-    ].map(async ({ name, probe }) => {
-      const timed = await Promise.race<boolean>([
-        probe,
-        new Promise<boolean>((r) => setTimeout(() => r(false), 1000)),
-      ]);
-      log.info({ bridge: name, available: timed }, "bridge availability");
-    }),
-  );
+  // NOTE: bridges are fully lazy — they connect (and spawn their child MCP
+  // server) only when a tool actually calls through them. We deliberately do
+  // NOT probe availability at boot: the old `eights.available()` probe spawned
+  // a child `node TheEights/daemon/dist/index.js` on every AgentSmith start,
+  // and the 1s race did not cancel the underlying connect, orphaning a child
+  // doing a slow cold-open against TheEights' large DB/WAL. Removing the probe
+  // eliminates a redundant long-lived Eights connection (which also fed WAL
+  // checkpoint starvation) and shaves boot time off the gateway's connect path.
 
   const kernel: SmithKernel = {
     cfg,
@@ -134,6 +128,17 @@ async function main(): Promise<void> {
     })();
   };
 
+  // Bring the stdio MCP transport up FIRST so the gateway's initialize
+  // handshake is answered immediately, before any tail warm-up. Combined with
+  // the seekToEnd tails below (which no longer replay historical event logs),
+  // this guarantees AgentSmith reaches MCP-ready well within the gateway's
+  // connect window regardless of how large the on-disk event logs are.
+  await startMcpServer(tools, "0.1.0");
+
+  // Tail watchers start after the transport is live. Each emitted event is
+  // classified; a match publishes to the in-process watcher and seals a
+  // decision record. seekToEnd (in eights-tail/hydra-tail) ensures pre-existing
+  // history is not re-read synchronously.
   try {
     const hydraTail = startHydraTail(handleTailEvent, {
       onError: (err) => log.warn({ err: String(err) }, "hydra-tail error"),
@@ -155,8 +160,6 @@ async function main(): Promise<void> {
   } catch (err) {
     log.warn({ err: String(err) }, "eights-tail failed to start");
   }
-
-  await startMcpServer(tools, "0.1.0");
 }
 
 main().catch((err) => {

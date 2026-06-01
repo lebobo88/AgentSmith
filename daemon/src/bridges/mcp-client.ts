@@ -83,6 +83,10 @@ export class McpClient {
     if (this.client) return;
     if (this.connecting) return this.connecting;
     this.connecting = (async () => {
+      // Declared outside the try so the catch can tear down a partially-built
+      // transport whose child process is already spawned.
+      let transport: StdioClientTransport | null = null;
+      let client: Client | null = null;
       try {
         const transportEnv: Record<string, string> = {};
         for (const [k, v] of Object.entries(process.env)) {
@@ -91,13 +95,13 @@ export class McpClient {
         if (this.cfg.env) {
           for (const [k, v] of Object.entries(this.cfg.env)) transportEnv[k] = v;
         }
-        const transport = new StdioClientTransport({
+        transport = new StdioClientTransport({
           command: this.cfg.command,
           args: this.cfg.args,
           env: transportEnv,
           ...(this.cfg.cwd ? { cwd: this.cfg.cwd } : {}),
         });
-        const client = new Client(
+        client = new Client(
           { name: `agentsmith-bridge:${this.cfg.name}`, version: "0.1.0" },
           { capabilities: {} },
         );
@@ -113,6 +117,20 @@ export class McpClient {
           { bridge: this.cfg.name, err: String(err) },
           "mcp-client connect failed",
         );
+        // The StdioClientTransport ctor already spawned the child process; a
+        // timed-out/failed connect would otherwise leave it running forever.
+        // Close the locals (not this.* — which were never assigned on failure)
+        // so the orphaned child is reaped.
+        try {
+          await client?.close();
+        } catch {
+          /* ignore */
+        }
+        try {
+          await transport?.close();
+        } catch {
+          /* ignore */
+        }
         this.client = null;
         this.transport = null;
         throw err;
