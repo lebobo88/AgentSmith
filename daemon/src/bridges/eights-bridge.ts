@@ -53,8 +53,60 @@ export interface DegradedMarker {
   reason: string;
 }
 
+/**
+ * Result of constitutionAttest. `receipt_id`/`hash` are retained as back-compat
+ * aliases (receipt_id = receipt_signature, hash = constitution content hash);
+ * `receipt_signature` is the canonical value a supervisor binds to its run
+ * state per the workflow-intake attestation contract.
+ */
+export interface AttestReceipt {
+  receipt_id: string;
+  hash: string;
+  receipt_signature?: string;
+  consumer?: string;
+  version?: string;
+  content_hash?: string;
+  attested_at?: string;
+  trace_id?: string;
+}
+
 function degraded<T extends Record<string, unknown>>(extra: T, reason: string): T & DegradedMarker {
   return { ...extra, degraded: true, reason };
+}
+
+/** The five consumers whose constitutions/resources TheEights governs. */
+type EightsConsumer = "eights" | "pp" | "hydra" | "execsuite" | "rlm";
+
+/**
+ * Consumer whose constitution AgentSmith binds a workflow to when attesting.
+ * Defaults to "hydra" — the orchestrator's frozen Immortal Head. The "eights"
+ * consumer has no constitution registered, so attesting against it always
+ * refuses; attesting a Hydra-orchestrated workflow against the hydra
+ * constitution is the semantically correct binding.
+ */
+const DEFAULT_ATTEST_CONSUMER: EightsConsumer = "hydra";
+
+/**
+ * AgentSmith's fixed read/propose Envelope for every governed eights MCP call.
+ *
+ * TheEights enforces an `Envelope` at every handler boundary (see
+ * `daemon/src/schemas/envelope.ts`). The bridge previously omitted it, so every
+ * governed call (constitution.attest, memory.add/search, evolution.propose/commit,
+ * governance.hitl.*) failed Zod validation and silently degraded to an
+ * all-zeros / "eights-mcp-unavailable" marker. The envelope is fixed and never
+ * broadens scope (empty `scope`), consistent with AGENTS.md "read and propose
+ * only". `trace_id` carries the workflow id when one is supplied so receipts and
+ * audit events bind to the originating workflow.
+ */
+function smithEnvelope(traceId?: string): Record<string, unknown> {
+  return {
+    tenant_id: "local",
+    actor_id: "agentsmith",
+    project_id: "TheEights",
+    domain: "governance",
+    scope: [],
+    trace_id: traceId ?? `smith_${randomUUID()}`,
+  };
 }
 
 export class EightsBridge {
@@ -163,7 +215,13 @@ export class EightsBridge {
       try {
         await this.client.call<{ proposal_id?: string; auto_committed?: boolean }>(
           "eights.evolution.propose",
-          parsed.args,
+          {
+            envelope: smithEnvelope(),
+            rid: parsed.args.rid,
+            candidate_content: parsed.args.candidate_content,
+            justification: parsed.args.justification,
+            evidence_memory_ids: parsed.args.evidence_memory_ids ?? [],
+          },
         );
         try {
           unlinkSync(fpath);
@@ -200,7 +258,14 @@ export class EightsBridge {
     scopes?: string[];
   }): Promise<{ id: string } | (DegradedMarker & { id: string })> {
     try {
-      const r = await this.client.call<{ id?: string }>("eights.memory.add", payload);
+      const r = await this.client.call<{ id?: string }>("eights.memory.add", {
+        envelope: smithEnvelope(),
+        content: payload.content,
+        type: payload.type,
+        scopes: payload.scopes ?? [],
+        cell: payload.cell,
+        provenance: { actor: "agentsmith", source_uri: "agentsmith://bridge" },
+      });
       return { id: r.id ?? "unknown" };
     } catch (err) {
       this.log.warn({ err: String(err), tool: "eights.memory.add" }, "degraded");
@@ -215,7 +280,12 @@ export class EightsBridge {
     limit?: number;
   }): Promise<{ results: unknown[] } | (DegradedMarker & { results: unknown[] })> {
     try {
-      const r = await this.client.call<{ results?: unknown[] }>("eights.memory.search", input);
+      const r = await this.client.call<{ results?: unknown[] }>("eights.memory.search", {
+        envelope: smithEnvelope(),
+        query: input.query,
+        types: input.type ? [input.type] : undefined,
+        top_k: input.limit ?? 10,
+      });
       return { results: r.results ?? [] };
     } catch (err) {
       this.log.warn({ err: String(err), tool: "eights.memory.search" }, "degraded");
@@ -253,7 +323,13 @@ export class EightsBridge {
     try {
       const r = await this.client.call<{ proposal_id?: string; auto_committed?: boolean }>(
         "eights.evolution.propose",
-        input,
+        {
+          envelope: smithEnvelope(),
+          rid: input.rid,
+          candidate_content: input.candidate_content,
+          justification: input.justification,
+          evidence_memory_ids: input.evidence_memory_ids ?? [],
+        },
       );
       return {
         proposal_id: r.proposal_id ?? "unknown",
@@ -275,7 +351,10 @@ export class EightsBridge {
     approver?: string;
   }): Promise<{ committed: boolean } | (DegradedMarker & { committed: boolean })> {
     try {
-      const r = await this.client.call<{ committed?: boolean }>("eights.evolution.commit", input);
+      const r = await this.client.call<{ committed?: boolean }>("eights.evolution.commit", {
+        envelope: smithEnvelope(),
+        proposal_id: input.proposal_id,
+      });
       return { committed: Boolean(r.committed) };
     } catch (err) {
       this.log.warn({ err: String(err), tool: "eights.evolution.commit" }, "degraded");
@@ -290,7 +369,7 @@ export class EightsBridge {
     try {
       const r = await this.client.call<{ request_id?: string }>(
         "eights.governance.hitl.request",
-        input,
+        { envelope: smithEnvelope(), kind: input.reason, payload: input.payload },
       );
       return { request_id: r.request_id ?? "unknown" };
     } catch (err) {
@@ -306,7 +385,7 @@ export class EightsBridge {
     try {
       const r = await this.client.call<{ requests?: unknown[] }>(
         "eights.governance.hitl.list",
-        input,
+        { envelope: smithEnvelope(), status: input.status ?? "pending" },
       );
       return { requests: r.requests ?? [] };
     } catch (err) {
@@ -317,25 +396,49 @@ export class EightsBridge {
 
   async constitutionAttest(
     workflow_id: string,
-  ): Promise<
-    | { receipt_id: string; hash: string }
-    | (DegradedMarker & { receipt_id: string; hash: string })
-  > {
+    consumer: EightsConsumer = DEFAULT_ATTEST_CONSUMER,
+  ): Promise<AttestReceipt | (DegradedMarker & AttestReceipt)> {
     try {
-      const r = await this.client.call<{ receipt_id?: string; hash?: string }>(
-        "eights.constitution.attest",
-        { workflow_id },
-      );
+      // eights.constitution.attest returns a ConstitutionReceipt:
+      // { consumer, rid, version, content_hash, attested_at, trace_id, receipt_signature }.
+      const r = await this.client.call<{
+        consumer?: string;
+        rid?: string;
+        version?: string;
+        content_hash?: string;
+        attested_at?: string;
+        trace_id?: string;
+        receipt_signature?: string;
+      }>("eights.constitution.attest", { envelope: smithEnvelope(workflow_id), consumer });
+      const signature = r.receipt_signature ?? "";
+      const hash = r.version ?? r.content_hash ?? "";
+      if (!signature || !hash) {
+        // Reached the engine but got an unexpected shape — surface, don't fake a receipt.
+        this.log.warn({ tool: "eights.constitution.attest", got: r }, "attest: unexpected response shape");
+        return degraded(
+          { receipt_id: "unknown", hash: "0".repeat(64), consumer },
+          "eights-attest-bad-shape",
+        );
+      }
       return {
-        receipt_id: r.receipt_id ?? "unknown",
-        hash: r.hash ?? "0".repeat(64),
+        receipt_id: signature, // back-compat alias; the canonical id is receipt_signature
+        hash,
+        receipt_signature: signature,
+        consumer: r.consumer ?? consumer,
+        version: r.version,
+        content_hash: r.content_hash,
+        attested_at: r.attested_at,
+        trace_id: r.trace_id,
       };
     } catch (err) {
-      this.log.warn({ err: String(err), tool: "eights.constitution.attest" }, "degraded");
-      return degraded(
-        { receipt_id: "degraded", hash: "0".repeat(64) },
-        "eights-mcp-unavailable",
-      );
+      // Distinguish a tool-level refusal (e.g. no constitution registered) from a
+      // transport failure so callers don't misread a clean refusal as "unavailable".
+      const msg = String(err);
+      const reason = msg.includes("refusing attestation") || msg.includes("content drift")
+        ? "eights-attest-refused"
+        : "eights-mcp-unavailable";
+      this.log.warn({ err: msg, tool: "eights.constitution.attest", reason }, "degraded");
+      return degraded({ receipt_id: "degraded", hash: "0".repeat(64), consumer }, reason);
     }
   }
 

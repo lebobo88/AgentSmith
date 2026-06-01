@@ -75,11 +75,18 @@ export function registerTools(kernel: SmithKernel): ToolMap {
     },
     {
       name: "agentsmith.constitution.attest",
-      description: "Emit an attestation receipt binding a workflow to the current constitution hash.",
-      inputSchema: z.object({ workflow_id: z.string() }),
+      description:
+        "Emit an attestation receipt binding a workflow to a consumer's constitution hash (default consumer: hydra). Refuses if that consumer has no registered constitution.",
+      inputSchema: z.object({
+        workflow_id: z.string(),
+        consumer: z.enum(["eights", "pp", "hydra", "execsuite", "rlm"]).optional(),
+      }),
       handler: async (args) => {
-        const a = args as { workflow_id: string };
-        return kernel.eights.constitutionAttest(a.workflow_id);
+        const a = args as {
+          workflow_id: string;
+          consumer?: "eights" | "pp" | "hydra" | "execsuite" | "rlm";
+        };
+        return kernel.eights.constitutionAttest(a.workflow_id, a.consumer);
       },
     },
     {
