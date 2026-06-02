@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { McpClient, type BridgeLogger, type McpServerConfig } from "./mcp-client.js";
+import { siblingPath } from "../paths.js";
 
 export interface EightsBridgeOptions {
   command?: string;
@@ -20,7 +21,7 @@ export interface EightsBridgeOptions {
   spoolDir?: string;
 }
 
-const DEFAULT_EIGHTS_ENTRY = "C:/AiAppDeployments/TheEights/daemon/dist/index.js";
+const DEFAULT_EIGHTS_ENTRY = `${siblingPath("TheEights")}/daemon/dist/index.js`;
 
 /**
  * Payload shape persisted to disk in the eights-pending spool.

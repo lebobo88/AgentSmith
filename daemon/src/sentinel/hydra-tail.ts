@@ -3,8 +3,9 @@ import { join } from "node:path";
 import { nanoid } from "nanoid";
 import { tailJsonlFile } from "./tail.js";
 import type { AnomalyEvent, AnomalySeverity } from "../schemas/anomaly.js";
+import { siblingPath } from "../paths.js";
 
-const DEFAULT_HYDRA_ROOT = "C:/AiAppDeployments/Hydra/.hydra";
+const DEFAULT_HYDRA_ROOT = `${siblingPath("Hydra")}/.hydra`;
 const SCAN_INTERVAL_MS = 5000;
 
 export interface HydraTailOptions {

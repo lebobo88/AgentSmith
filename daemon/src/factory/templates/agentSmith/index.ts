@@ -1,4 +1,5 @@
 import type { ProjectTemplates, TemplateFn } from "../types.js";
+import { repoRootDefault } from "../../../paths.js";
 
 const agent: TemplateFn = (slug, opts) => {
   const fm: Record<string, unknown> = {
@@ -168,27 +169,31 @@ hitl_on_fail: true
   risk_class: "critical",
 });
 
-const mcp: TemplateFn = (slug) => ({
-  frontmatter: {},
-  body: JSON.stringify(
-    {
-      mcpServers: {
-        [slug]: {
-          command: "node",
-          args: ["C:/AiAppDeployments/AgentSmith/daemon/dist/index.js"],
-          env: {
-            AGENTSMITH_HOME: "${HOME}/.agentsmith",
-            LOG_LEVEL: "info",
+const mcp: TemplateFn = (slug) => {
+  const repoRoot = repoRootDefault();
+  return {
+    frontmatter: {},
+    body: JSON.stringify(
+      {
+        mcpServers: {
+          [slug]: {
+            command: "node",
+            args: [`${repoRoot}/daemon/dist/index.js`],
+            env: {
+              AGENTSMITH_HOME: "${HOME}/.agentsmith",
+              AGENTSMITH_REPO: repoRoot,
+              AGENTSMITH_LOG_LEVEL: "info",
+            },
           },
         },
       },
-    },
-    null,
-    2,
-  ) + "\n",
-  target_subpath: `.mcp.json`,
-  risk_class: "critical",
-});
+      null,
+      2,
+    ) + "\n",
+    target_subpath: `.mcp.json`,
+    risk_class: "critical",
+  };
+};
 
 function titleCase(slug: string): string {
   return slug

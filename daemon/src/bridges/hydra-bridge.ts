@@ -10,8 +10,9 @@
  */
 import { existsSync } from "node:fs";
 import { McpClient, type BridgeLogger, type McpServerConfig } from "./mcp-client.js";
+import { siblingPath } from "../paths.js";
 
-const DEFAULT_HYDRA_ROOT = "C:/AiAppDeployments/Hydra";
+const DEFAULT_HYDRA_ROOT = siblingPath("Hydra");
 
 export interface HydraBridgeOptions {
   command?: string;

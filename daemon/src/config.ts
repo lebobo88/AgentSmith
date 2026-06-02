@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { repoRootDefault, siblingsBaseDefault } from "./paths.js";
 
 export interface AgentSmithConfig {
   agentsmithHome: string;
@@ -17,7 +18,10 @@ export interface AgentSmithConfig {
 
 export function loadConfig(): AgentSmithConfig {
   const home = process.env["AGENTSMITH_HOME"] ?? join(homedir(), ".agentsmith");
-  const repoRoot = process.env["AGENTSMITH_REPO"] ?? "C:/AiAppDeployments/AgentSmith";
+  const repoRoot = process.env["AGENTSMITH_REPO"] ?? repoRootDefault();
+  // Sibling projects live adjacent to the clone (same parent), overridable by env.
+  const consumerBase = process.env["AGENTSMITH_CONSUMER_BASE"] ?? siblingsBaseDefault();
+  const sibling = (name: string) => join(consumerBase, name).replace(/\\/g, "/");
 
   return {
     agentsmithHome: home,
@@ -28,12 +32,12 @@ export function loadConfig(): AgentSmithConfig {
     logsDir: join(home, "logs"),
     constitutionPath: join(repoRoot, "daemon", "src", "constitution", "smith-constitution.md"),
     consumerRoots: {
-      hydra: "C:/AiAppDeployments/Hydra",
-      eights: "C:/AiAppDeployments/TheEights",
-      executiveSuite: "C:/AiAppDeployments/ExecutiveSuite",
-      marketBliss: "C:/AiAppDeployments/MarketBliss",
-      rlmCreative: "C:/AiAppDeployments/RLM-Creative",
-      pairProgrammer: "C:/AiAppDeployments/pair-programmer",
+      hydra: sibling("Hydra"),
+      eights: sibling("TheEights"),
+      executiveSuite: sibling("ExecutiveSuite"),
+      marketBliss: sibling("MarketBliss"),
+      rlmCreative: sibling("RLM-Creative"),
+      pairProgrammer: sibling("pair-programmer"),
       agentSmith: repoRoot,
     },
     replicationQuotaPerScope: Number(process.env["AGENTSMITH_REPLICATION_QUOTA"] ?? 4),

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { repoRootDefault } from "../paths.js";
 
 export interface RubricCriterion {
   id: string;
@@ -21,7 +22,7 @@ export interface Rubric {
   hitl_on_fail: boolean;
 }
 
-const RUBRICS_DIR = process.env["AGENTSMITH_RUBRICS_DIR"] ?? "C:/AiAppDeployments/AgentSmith/rubrics";
+const RUBRICS_DIR = process.env["AGENTSMITH_RUBRICS_DIR"] ?? join(repoRootDefault(), "rubrics");
 const MAX_FILE_BYTES = 1024 * 1024; // 1MB cap
 
 const cache = new Map<string, Rubric>();

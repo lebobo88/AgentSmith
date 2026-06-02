@@ -2,10 +2,11 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { SmithDecisionRecord } from "../schemas/decision-record.js";
 import type { EightsBridge } from "../bridges/index.js";
+import { siblingPath } from "../paths.js";
 
 const MAX_FILE_BYTES = 1024 * 1024; // 1MB cap
 const MAX_TRACE_LINES = 200;
-const DEFAULT_HYDRA_TAIL_DIR = "C:/AiAppDeployments/Hydra/.hydra";
+const DEFAULT_HYDRA_TAIL_DIR = `${siblingPath("Hydra")}/.hydra`;
 
 export interface CrossSystemLink {
   source: "smith" | "hydra" | "eights";
