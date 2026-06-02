@@ -257,7 +257,7 @@ function failVerdict(decided_at: string, rationale: string): SmithVerdict {
     rationale,
     cited_invariants: ["N7"],
     suggested_fix:
-      "restore conforming frontmatter; see C:/AiAppDeployments/AgentSmith/.claude/skills/cross-project-conventions/SKILL.md",
+      "restore conforming frontmatter; see <repo>/.claude/skills/cross-project-conventions/SKILL.md",
     evidence: [],
     decided_at,
   };

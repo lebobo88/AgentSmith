@@ -81,6 +81,9 @@ function Install-Item([string]$Source, [string]$Target, [bool]$PreferSymlink) {
 }
 
 function Ensure-McpRegistered {
+  # Self-healing on EVERY run (not just -Force): a re-run after the repo is moved or
+  # re-cloned must refresh a stale command/env, so we always remove-then-add rather than
+  # skipping when already listed. Remove is best-effort (non-zero exit when absent is fine).
   $listed = $false
   try {
     $out = & claude mcp list 2>&1
@@ -89,12 +92,15 @@ function Ensure-McpRegistered {
     Write-Smith "claude CLI not reachable while probing mcp list; will attempt add anyway: $_" "warn"
   }
   if ($listed) {
-    Write-Smith "MCP already registered: agentsmith"
-    return $false
+    Write-Smith "refreshing existing MCP registration: agentsmith"
+    try { & claude mcp remove agentsmith --scope user 2>&1 | Out-Null } catch { }
   }
   $entry = "node $RepoRoot/daemon/dist/index.js"
-  Write-Smith "registering MCP server: $entry"
-  & claude mcp add agentsmith --scope user -- node "$RepoRoot/daemon/dist/index.js"
+  Write-Smith "registering MCP server: $entry (AGENTSMITH_REPO=$RepoRoot)"
+  # Documented `claude mcp add` contract: ALL options (--scope, --env) before the server
+  # name, then `--` separates the spawn command. --env injects the authoritative repo root
+  # so the daemon resolves paths even if its own self-location is ever bypassed.
+  & claude mcp add --scope user --env AGENTSMITH_REPO=$RepoRoot agentsmith -- node "$RepoRoot/daemon/dist/index.js"
   if ($LASTEXITCODE -ne 0) { throw "claude mcp add failed (exit $LASTEXITCODE)" }
   return $true
 }
@@ -104,7 +110,12 @@ function Merge-Hooks {
     Write-Smith "no hooks.json at $HooksJsonPath — skipping hook merge" "warn"
     return @()
   }
-  $repoHooks = (Get-Content $HooksJsonPath -Raw | ConvertFrom-Json -AsHashtable).hooks
+  # hooks.json is committed with the `__AGENTSMITH_REPO__` placeholder so it carries
+  # no machine-specific path. Substitute the dynamically-resolved repo root (already
+  # normalized to forward slashes) before parsing, so user-scope hooks get an absolute
+  # path to THIS clone. ($RepoRoot has no backslashes, so JSON stays valid.)
+  $rawHooks = (Get-Content $HooksJsonPath -Raw).Replace('__AGENTSMITH_REPO__', $RepoRoot)
+  $repoHooks = ($rawHooks | ConvertFrom-Json -AsHashtable).hooks
 
   # Backup settings.
   if (Test-Path $SettingsPath) {
@@ -117,6 +128,17 @@ function Merge-Hooks {
     $settings = @{}
   }
   if (-not $settings.ContainsKey("hooks")) { $settings["hooks"] = @{} }
+
+  # Idempotent refresh: drop any previously-installed Smith hook entries (tagged with the
+  # sentinel) before re-adding. This lets a plain re-run replace stale absolute-path hooks
+  # (e.g. after the repo is moved/re-cloned) instead of skipping them. User-authored hooks
+  # (no sentinel) are preserved.
+  foreach ($eventName in @($settings["hooks"].Keys)) {
+    $kept = @($settings["hooks"][$eventName] | Where-Object {
+      -not ($_ -is [hashtable] -and $_['$installed_by'] -eq $SmithSentinel)
+    })
+    $settings["hooks"][$eventName] = $kept
+  }
 
   $added = @()
   foreach ($eventName in $repoHooks.Keys) {

@@ -3,7 +3,7 @@
  *
  * Default command is read from <pp-root>/.mcp.json (the `pp_harness` entry).
  * If the file isn't present, falls back to
- *   node C:/AiAppDeployments/pair-programmer/daemon/dist/index.js mcp
+ *   node <pp-root>/daemon/dist/index.js mcp
  *
  * The pp_harness MCP server exposes tools with bare names (no namespace),
  * e.g. `start_best_of_stage`, `borda_count`, `archive_winner_and_losers`.
@@ -11,8 +11,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
 import { McpClient, type BridgeLogger, type McpServerConfig } from "./mcp-client.js";
+import { siblingPath } from "../paths.js";
 
-const DEFAULT_PP_ROOT = "C:/AiAppDeployments/pair-programmer";
+const DEFAULT_PP_ROOT = siblingPath("pair-programmer");
 const PP_MCP_JSON = `${DEFAULT_PP_ROOT}/.mcp.json`;
 const FALLBACK_ENTRY = `${DEFAULT_PP_ROOT}/daemon/dist/index.js`;
 

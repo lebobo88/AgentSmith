@@ -10,11 +10,13 @@ import {
 import type { AgentSmithConfig } from "../config.js";
 import { resolveTemplate } from "./templates/index.js";
 import { renderMarkdown, type RiskClass, type TemplateOptions } from "./templates/types.js";
+import { siblingsBaseDefault } from "../paths.js";
 
-/** Platform-appropriate default root for ad-hoc consumer projects. Read at
- *  call-time (not module-load) so tests can override via env. */
+/** Default root for ad-hoc consumer projects. Read at call-time (not module-load)
+ *  so tests can override via env. Defaults to the folder holding sibling projects
+ *  adjacent to the AgentSmith clone. */
 function defaultConsumerBase(): string {
-  return process.env["AGENTSMITH_CONSUMER_BASE"] ?? "C:/AiAppDeployments";
+  return process.env["AGENTSMITH_CONSUMER_BASE"] ?? siblingsBaseDefault();
 }
 
 /** Signals that mark a directory as a real consumer project root. */
@@ -28,7 +30,7 @@ const CONSUMER_PROJECT_SIGNALS = [".claude", "AGENTS.md", "CLAUDE.md"] as const;
  *      camelCase names: hydra, eights, executiveSuite, marketBliss,
  *      rlmCreative, pairProgrammer, agentSmith).
  *   2. Fallback: `<DEFAULT_CONSUMER_ROOTS_BASE>/<slug>` (default
- *      `C:/AiAppDeployments/<slug>`). The resolved directory must EXIST
+ *      `H:/<slug>`). The resolved directory must EXIST
  *      and contain at least one of `.claude/`, `AGENTS.md`, or `CLAUDE.md`
  *      — otherwise a clear error is thrown listing all three signals.
  *

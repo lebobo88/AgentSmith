@@ -19,20 +19,21 @@ try {
     } catch { }
     if (-not $mcpOk) { $reasons += 'mcp:agentsmith not registered' }
 
+    # Self-locate the repo root from this hook's own location:
+    # <repo>/.claude/hooks/agentsmith-doctor.ps1  ->  $PSScriptRoot/..\.. = <repo>
+    $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
+    # Siblings live adjacent to the clone (same parent), overridable via env.
+    $siblingsBase = $env:AGENTSMITH_CONSUMER_BASE
+    if (-not $siblingsBase) { $siblingsBase = Split-Path -Parent $repoRoot }
+
     # (b) constitution file exists
-    $constitution = 'C:\AiAppDeployments\AgentSmith\daemon\src\constitution\smith-constitution.md'
+    $constitution = Join-Path $repoRoot 'daemon\src\constitution\smith-constitution.md'
     $constOk = Test-Path -LiteralPath $constitution
     if (-not $constOk) { $reasons += "constitution missing: $constitution" }
 
-    # (c) at least 3 of 5 sibling project roots reachable
-    $siblings = @(
-        'C:\AiAppDeployments\Hydra',
-        'C:\AiAppDeployments\TheEights',
-        'C:\AiAppDeployments\ExecutiveSuite',
-        'C:\AiAppDeployments\MarketBliss',
-        'C:\AiAppDeployments\RLM-Creative',
-        'C:\AiAppDeployments\pair-programmer'
-    )
+    # (c) at least 3 of 6 sibling project roots reachable
+    $siblings = @('Hydra','TheEights','ExecutiveSuite','MarketBliss','RLM-Creative','pair-programmer') |
+        ForEach-Object { Join-Path $siblingsBase $_ }
     $reachable = ($siblings | Where-Object { Test-Path -LiteralPath $_ }).Count
     if ($reachable -lt 3) { $reasons += "only $reachable/6 sibling roots reachable" }
 

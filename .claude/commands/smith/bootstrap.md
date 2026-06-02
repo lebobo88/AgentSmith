@@ -12,9 +12,9 @@ Idempotent bootstrap. Safe to re-run.
 
 ## Steps
 
-1. Probe whether the agentsmith MCP server is already registered (`claude mcp list`). If not, instruct the user to run:
+1. Probe whether the agentsmith MCP server is already registered (`claude mcp list`). If not, instruct the user to run (all options before the server name, then `--`; `--env` pins the repo root so the daemon resolves paths regardless of where it self-locates):
    ```
-   claude mcp add agentsmith --scope user -- node <repo-root>/daemon/dist/index.js
+   claude mcp add --scope user --env AGENTSMITH_REPO=<repo-root> agentsmith -- node <repo-root>/daemon/dist/index.js
    ```
    (We do not run this for them — MCP add prompts the user and is an authorization event.)
 
