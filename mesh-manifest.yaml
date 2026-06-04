@@ -1,0 +1,88 @@
+apiVersion: agentmesh/v1
+kind: SiblingManifest
+
+metadata:
+  id: agentsmith
+  displayName: "AgentSmith Inspector and Governance"
+  version: "1.0.0"
+  description: "Inspection, quarantine, sentinel anomaly detection, keymaker scanning, and oracle evaluation for the enterprise AI mesh."
+
+runtime:
+  type: node20-ts
+  entrypoint: "dist/index.js"
+  cwd: "C:/AiAppDeployments/AgentSmith"
+  healthProbe:
+    type: mcp-tool-call
+    # agentsmith.inspector.invariants_list: cheap no-args read returning constitution_sha256 + invariants list.
+    # Source: AgentSmith/daemon/src/mcp/tools.ts — registerTools(), "agentsmith.inspector.invariants_list"
+    tool: "agentsmith.inspector.invariants_list"
+    intervalMs: 15000
+    timeoutMs: 5000
+    failureThreshold: 3
+
+mcp:
+  endpoint:
+    type: stdio
+  # REAL tool names discovered from AgentSmith/daemon/src/mcp/tools.ts — registerTools().
+  # Includes ALL tools required by audit.exportTool and governance.attestTool.
+  tools:
+    # --- factory namespace ---
+    - "agentsmith.factory.scaffold"
+    - "agentsmith.factory.promote"
+    # --- inspector namespace ---
+    - "agentsmith.inspector.inspect"
+    - "agentsmith.inspector.invariants_list"
+    # --- constitution namespace ---
+    - "agentsmith.constitution.get"
+    - "agentsmith.constitution.attest"
+    - "agentsmith.constitution.propose_amendment"
+    # --- replicator namespace ---
+    - "agentsmith.replicator.spawn"
+    - "agentsmith.replicator.teardown"
+    - "agentsmith.replicator.list"
+    # --- sentinel namespace ---
+    - "agentsmith.sentinel.signatures_list"
+    - "agentsmith.sentinel.events_recent"
+    - "agentsmith.sentinel.classify"
+    # --- quarantine namespace ---
+    - "agentsmith.quarantine.isolate"
+    - "agentsmith.quarantine.release"
+    # --- keymaker namespace ---
+    - "agentsmith.keymaker.scan"
+    - "agentsmith.keymaker.gap_report"
+    # --- oracle namespace ---
+    - "agentsmith.oracle.evaluate"
+    # --- archivist namespace ---
+    - "agentsmith.archivist.audit"
+    - "agentsmith.archivist.decisions"
+    - "agentsmith.archivist.seal"
+    # --- bridge proxy tools ---
+    - "agentsmith.eights.memory_add"
+    - "agentsmith.eights.evolution_propose"
+    - "agentsmith.eights.hitl_request"
+    - "agentsmith.eights.lookup_envelope_attempt"
+    - "agentsmith.hydra.squad_list"
+    - "agentsmith.hydra.venom_cross_check"
+    - "agentsmith.pp.best_of_start"
+    - "agentsmith.pp.borda_count"
+
+lifecycle:
+  startTimeoutMs: 30000
+  gracefulShutdownMs: 10000
+  crashLoopBreaker:
+    threshold: 5
+    windowMs: 60000
+
+audit:
+  # Tool used to export audit/decision records for federated stitching.
+  # Source: AgentSmith/daemon/src/mcp/tools.ts — "agentsmith.archivist.decisions"
+  exportTool: "agentsmith.archivist.decisions"
+  dedupeKeyField: "id"
+
+governance:
+  # Constitution file path relative to runtime.cwd (C:/AiAppDeployments/AgentSmith).
+  # Verified to exist: C:/AiAppDeployments/AgentSmith/daemon/src/constitution/smith-constitution.md
+  constitutionPath: "daemon/src/constitution/smith-constitution.md"
+  # Tool used by meshd to attest the constitution hash.
+  # Source: AgentSmith/daemon/src/mcp/tools.ts — "agentsmith.constitution.attest"
+  attestTool: "agentsmith.constitution.attest"
