@@ -7,17 +7,46 @@ $ErrorActionPreference = 'Continue'
 $reasons = @()
 
 try {
-    # (a) claude mcp list includes "agentsmith"
+    # (a) agentsmith MCP registered.
+    # Primary: read ~/.claude.json directly — fast and reliable. The old
+    # `claude mcp list` Start-Job probe with a 1s timeout was a perpetual
+    # false negative: the CLI pings every server (>1s) and job errors were
+    # swallowed, so $mcpOk never went true.
     $mcpOk = $false
-    try {
-        $job = Start-Job -ScriptBlock { claude mcp list 2>&1 }
-        if (Wait-Job $job -Timeout 1) {
-            $out = Receive-Job $job 2>$null
-            if ($out -match 'agentsmith') { $mcpOk = $true }
+    $mcpProbeNote = $null
+    $claudeJson = Join-Path $env:USERPROFILE '.claude.json'
+    if (Test-Path -LiteralPath $claudeJson) {
+        try {
+            $cfg = Get-Content -LiteralPath $claudeJson -Raw | ConvertFrom-Json
+            if ($cfg.mcpServers.PSObject.Properties.Name -contains 'agentsmith') {
+                $mcpOk = $true
+            }
+        } catch {
+            $mcpProbeNote = "config parse failed: $($_.Exception.Message)"
         }
-        Remove-Job $job -Force -ErrorAction SilentlyContinue
-    } catch { }
-    if (-not $mcpOk) { $reasons += 'mcp:agentsmith not registered' }
+    }
+    # Fallback: ask the CLI, with a realistic timeout, surfacing errors
+    # instead of swallowing them so PATH failures are distinguishable
+    # from slowness.
+    if (-not $mcpOk) {
+        try {
+            $job = Start-Job -ScriptBlock { claude mcp list 2>&1 }
+            if (Wait-Job $job -Timeout 10) {
+                $out = Receive-Job $job 2>&1
+                if ($out -match 'agentsmith') { $mcpOk = $true }
+            } else {
+                $mcpProbeNote = 'claude mcp list timed out after 10s'
+            }
+            Remove-Job $job -Force -ErrorAction SilentlyContinue
+        } catch {
+            $mcpProbeNote = "claude mcp list failed: $($_.Exception.Message)"
+        }
+    }
+    if (-not $mcpOk) {
+        $msg = 'mcp:agentsmith not registered'
+        if ($mcpProbeNote) { $msg += " ($mcpProbeNote)" }
+        $reasons += $msg
+    }
 
     # Self-locate the repo root from this hook's own location:
     # <repo>/.claude/hooks/agentsmith-doctor.ps1  ->  $PSScriptRoot/..\.. = <repo>
