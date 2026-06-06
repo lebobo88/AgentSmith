@@ -7,17 +7,32 @@ $ErrorActionPreference = 'Continue'
 $reasons = @()
 
 try {
-    # (a) claude mcp list includes "agentsmith"
+    # (a) agentsmith MCP reachable — either registered directly in the Claude
+    # user config, or fronted by hydra_gateway (mesh architecture: gateway is
+    # registered with Claude and agentsmith is enrolled in backends.json).
+    # Config-file check, not `claude mcp list`: a SessionStart hook cannot
+    # afford the multi-second server probe (the old 1s Wait-Job ALWAYS lost
+    # the race and reported degraded even when registration was fine).
     $mcpOk = $false
     try {
-        $job = Start-Job -ScriptBlock { claude mcp list 2>&1 }
-        if (Wait-Job $job -Timeout 1) {
-            $out = Receive-Job $job 2>$null
-            if ($out -match 'agentsmith') { $mcpOk = $true }
+        $claudeCfg = Join-Path $env:USERPROFILE '.claude.json'
+        if (Test-Path -LiteralPath $claudeCfg) {
+            $cfg = Get-Content -LiteralPath $claudeCfg -Raw | ConvertFrom-Json
+            $servers = @($cfg.mcpServers.PSObject.Properties.Name)
+            if ($servers -contains 'agentsmith') {
+                $mcpOk = $true
+            } elseif ($servers -contains 'hydra_gateway') {
+                $backendsFile = Join-Path $env:USERPROFILE '.hydra\backends.json'
+                if (Test-Path -LiteralPath $backendsFile) {
+                    $backends = Get-Content -LiteralPath $backendsFile -Raw | ConvertFrom-Json
+                    if (@($backends.PSObject.Properties.Name) -contains 'agentsmith') {
+                        $mcpOk = $true
+                    }
+                }
+            }
         }
-        Remove-Job $job -Force -ErrorAction SilentlyContinue
     } catch { }
-    if (-not $mcpOk) { $reasons += 'mcp:agentsmith not registered' }
+    if (-not $mcpOk) { $reasons += 'mcp:agentsmith not registered (directly or via hydra_gateway backends.json)' }
 
     # (b) constitution file exists
     $constitution = 'C:\AiAppDeployments\AgentSmith\daemon\src\constitution\smith-constitution.md'
