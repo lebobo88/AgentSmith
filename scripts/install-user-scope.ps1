@@ -143,7 +143,9 @@ function Merge-Hooks {
   # Permissions allowlist for agentsmith tools (avoid re-prompts).
   if (-not $settings.ContainsKey("permissions")) { $settings["permissions"] = @{} }
   if (-not $settings["permissions"].ContainsKey("allow")) { $settings["permissions"]["allow"] = @() }
-  $permEntry = "mcp__agentsmith__*"
+  # Server-scope rule (no glob): "mcp__agentsmith" allows every agentsmith tool.
+  # Claude Code's allow-rule validator rejects bare "__*" tool wildcards.
+  $permEntry = "mcp__agentsmith"
   $permsAdded = @()
   if (-not ($settings["permissions"]["allow"] -contains $permEntry)) {
     $settings["permissions"]["allow"] += $permEntry

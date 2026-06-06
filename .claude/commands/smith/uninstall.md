@@ -19,7 +19,7 @@ model: sonnet
 - Reads `~/.claude/.agentsmith-installed.json` manifest
 - Removes every symlinked/copied agent, skill, and the `commands/smith` directory
 - Strips Smith-tagged hook entries (`$installed_by = "agentsmith"`) from `~/.claude/settings.json`
-- Removes the `mcp__agentsmith__*` permission entry
+- Removes the `mcp__agentsmith` permission entry (and the legacy `mcp__agentsmith__*` form)
 - Calls `claude mcp remove agentsmith --scope user`
 - Deletes the manifest
 

@@ -28,7 +28,7 @@ What happens:
 3. Symlink (or copy) `.claude/agents/*.md` into `~/.claude/agents/`.
 4. Symlink (or copy) `.claude/skills/<slug>/` into `~/.claude/skills/`.
 5. Symlink (or copy) `.claude/commands/smith/` into `~/.claude/commands/smith/`.
-6. Backup `~/.claude/settings.json` then merge AgentSmith hooks (tagged `"$installed_by": "agentsmith"`) and add `mcp__agentsmith__*` to the permissions allowlist.
+6. Backup `~/.claude/settings.json` then merge AgentSmith hooks (tagged `"$installed_by": "agentsmith"`) and add `mcp__agentsmith` (server-scope rule) to the permissions allowlist.
 7. Write manifest at `~/.claude/.agentsmith-installed.json`.
 
 Restart Claude Code in any project to see `/smith:*` and `mcp__agentsmith__*` surface.

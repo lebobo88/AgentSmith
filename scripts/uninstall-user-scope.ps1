@@ -66,7 +66,8 @@ if (-not $KeepSettings -and (Test-Path $SettingsPath)) {
     }
   }
   if ($settings.ContainsKey("permissions") -and $settings["permissions"].ContainsKey("allow")) {
-    $settings["permissions"]["allow"] = $settings["permissions"]["allow"] | Where-Object { $_ -ne "mcp__agentsmith__*" }
+    # Remove both the current server-scope entry and the legacy wildcard form.
+    $settings["permissions"]["allow"] = $settings["permissions"]["allow"] | Where-Object { $_ -notin @("mcp__agentsmith", "mcp__agentsmith__*") }
   }
   ($settings | ConvertTo-Json -Depth 12) | Set-Content $SettingsPath -Encoding utf8
   Write-Smith "stripped $removed Smith hook entries; permissions cleaned" "ok"

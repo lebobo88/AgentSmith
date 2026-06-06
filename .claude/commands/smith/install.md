@@ -22,7 +22,7 @@ Runs the user-scope installer. Idempotent.
 - Builds `daemon/dist/index.js` if missing
 - Registers `agentsmith` MCP server at user scope
 - Symlinks (or copies) `.claude/{agents,skills,commands/smith}` into `~/.claude/`
-- Merges hooks + adds `mcp__agentsmith__*` permission into `~/.claude/settings.json`
+- Merges hooks + adds `mcp__agentsmith` (server-scope) permission into `~/.claude/settings.json`
 - Writes manifest at `~/.claude/.agentsmith-installed.json`
 
 After install, restart Claude Code in any project to surface `/smith:*` commands and `mcp__agentsmith__*` tools.
