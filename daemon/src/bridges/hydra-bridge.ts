@@ -69,11 +69,13 @@ export class HydraBridge {
         "hydra.venom.cross_check",
         { capability, args },
       );
-      return { ok: Boolean(r.ok), rationale: r.rationale ?? "" };
+      // Strict equality: ok must be exactly the boolean true.
+      // Boolean("false") is truthy; we reject all coercions (Issue 1).
+      return { ok: r.ok === true, rationale: r.rationale ?? "" };
     } catch (err) {
       this.log.warn({ err: String(err), capability }, "venomCrossCheck degraded");
       return degraded(
-        { ok: true, rationale: "venom unreachable — failing open per N-default" },
+        { ok: false, rationale: "venom unreachable — failing CLOSED (N2)" },
         "hydra-mcp-unavailable",
       );
     }

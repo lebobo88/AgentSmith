@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EightsBridge } from "../src/bridges/eights-bridge.js";
+import { EightsBridge, type SinkGateRefs } from "../src/bridges/eights-bridge.js";
 
 /**
  * AS3 — eights proposal spool + replay.
@@ -12,10 +12,26 @@ import { EightsBridge } from "../src/bridges/eights-bridge.js";
  * TheEights child process — the goal is to exercise the spool / replay
  * state machine, not the MCP protocol layer (covered by mcp-client tests
  * elsewhere if/when added).
+ *
+ * A passing SinkGateRefs is injected so that governance enforcement (added in
+ * the pass-4 fail-closed fix) does not block these tests, which are focused
+ * on the spool/replay state machine rather than the gate logic. Gate behavior
+ * is tested separately in governance.test.ts.
  */
 
 interface BridgeInternals {
   client: { call: (tool: string, args: unknown) => Promise<unknown> };
+}
+
+/** A gate that always passes — used in spool tests where gate logic is not under test. */
+function makePassingGate(): SinkGateRefs {
+  const HASH = "a".repeat(64);
+  return {
+    inspectContent: vi.fn().mockResolvedValue({ outcome: "allow", rationale: "ok", cited_invariants: [] }),
+    venomCheck: vi.fn().mockResolvedValue({ ok: true, rationale: "allowed" }),
+    constitutionHash: vi.fn().mockReturnValue(HASH),
+    bootAttestedHash: HASH,
+  };
 }
 
 describe("AS3 — eights-bridge proposal spool + replay", () => {
@@ -43,6 +59,9 @@ describe("AS3 — eights-bridge proposal spool + replay", () => {
       // unless we override its `call` method below.
       command: "node",
       args: ["--version"],
+      // Gate required (pass-4): inject a passing gate so gate logic doesn't
+      // interfere with spool/replay state machine tests.
+      gate: makePassingGate(),
     });
   });
 

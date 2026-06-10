@@ -10,6 +10,51 @@ import { evaluate as oracleEvaluate, promote as oraclePromote } from "../oracle/
 import { DecisionStore, buildAudit } from "../archivist/index.js";
 import { EightsBridge, HydraBridge, PpBridge, ConsumerBridge } from "../bridges/index.js";
 import { ArtifactKindSchema, ConsumerProjectSchema } from "../schemas/artifact.js";
+import type { SmithVerdict } from "../schemas/verdict.js";
+
+/**
+ * AS-GV-2: Venom guard — shared N2 enforcement helper.
+ *
+ * Calls venomCrossCheck and returns { allowed, rationale }. Returns
+ * allowed=false (CLOSED) on ANY of:
+ *   - ok !== true (merits-deny from Hydra)
+ *   - degraded / unreachable (fail-closed per AS-GV-3)
+ *   - any exception from the call
+ *
+ * Apply this to every capability/commit path before committing or proposing.
+ * A non-allowed result MUST short-circuit to a rejected ticket.
+ */
+async function venomGuard(
+  kernel: SmithKernel,
+  capability: string,
+  args: unknown,
+): Promise<{ allowed: boolean; rationale: string }> {
+  try {
+    const r = await kernel.hydra.venomCrossCheck(capability, args);
+    // Strict: allowed only when ok is EXACTLY true (not truthy, not missing).
+    const allowed = r.ok === true;
+    return { allowed, rationale: r.rationale };
+  } catch (err) {
+    // Any exception → fail closed.
+    return { allowed: false, rationale: `N2: venom guard threw (fail CLOSED): ${String(err)}` };
+  }
+}
+
+/**
+ * AS-GV-1/3: Inspector gate — shared helper for promote and evolution_propose.
+ *
+ * Runs inspector.inspect. Returns the verdict. Callers MUST short-circuit
+ * unless verdict.outcome === "allow" exactly. escalate/modify/deny all block.
+ */
+async function inspectorGate(kernel: SmithKernel, input: {
+  kind: string;
+  content: string;
+  project?: string;
+  path?: string;
+  id?: string;
+}): Promise<SmithVerdict> {
+  return kernel.inspector.inspect(input as any);
+}
 
 export interface SmithKernel {
   cfg: AgentSmithConfig;
@@ -86,6 +131,9 @@ export function registerTools(kernel: SmithKernel): ToolMap {
           workflow_id: string;
           consumer?: "eights" | "pp" | "hydra" | "execsuite" | "rlm";
         };
+        // Hash is sourced internally by the bridge from the injected gate.constitutionHash().
+        // The caller must not (and cannot) supply a localHash — the bridge parameter
+        // was removed to prevent caller-override (Issue 2, pass-4 fix).
         return kernel.eights.constitutionAttest(a.workflow_id, a.consumer);
       },
     },
@@ -212,10 +260,45 @@ export function registerTools(kernel: SmithKernel): ToolMap {
     },
     {
       name: "agentsmith.factory.promote",
-      description: "Promote a passing draft via TheEights evolution.propose (auto-commit if low-risk).",
+      description: "Promote a passing draft via TheEights evolution.propose (auto-commit if low-risk). Inspector runs first (N7 — must return 'allow'); venomGuard runs second (N2 — venom unreachable fails closed). Any non-allow Inspector outcome or a blocked venom gate short-circuits before any oracle call.",
       inputSchema: z.object({ draft: z.record(z.unknown()), rubric_ids: z.array(z.string()) }),
       handler: async (args) => {
-        const a = args as { draft: any; rubric_ids: string[] };
+        const a = args as { draft: Record<string, unknown>; rubric_ids: string[] };
+        const inspectKind = (a.draft["kind"] as any) ?? "agent";
+        const inspectContent = typeof a.draft["content"] === "string" ? a.draft["content"] : JSON.stringify(a.draft);
+        const inspectProject = (a.draft["project"] as any) ?? undefined;
+        const inspectPath = typeof a.draft["target_path"] === "string" ? a.draft["target_path"] : undefined;
+        const inspectId = typeof a.draft["draft_id"] === "string" ? a.draft["draft_id"] : undefined;
+
+        // AS-GV-1/3: Inspector gate. MUST return "allow" exactly — escalate/modify/deny all block.
+        const verdict = await inspectorGate(kernel, {
+          kind: inspectKind,
+          content: inspectContent,
+          project: inspectProject,
+          path: inspectPath,
+          id: inspectId,
+        });
+        if (verdict.outcome !== "allow") {
+          return {
+            ticket_id: `promo_${inspectId ?? "unknown"}_inspector_${verdict.outcome}`,
+            draft_id: inspectId ?? "unknown",
+            status: "rejected",
+            rationale: `Inspector gate blocked (outcome=${verdict.outcome}): ${verdict.rationale} [cited: ${verdict.cited_invariants.join(", ")}]`,
+            inspector_verdict: verdict,
+          };
+        }
+
+        // AS-GV-2: N2 venom guard. venomCrossCheck unreachable → allowed=false (fail CLOSED).
+        const venom = await venomGuard(kernel, `agentsmith.factory.promote:${inspectKind}`, a.draft);
+        if (!venom.allowed) {
+          return {
+            ticket_id: `promo_${inspectId ?? "unknown"}_venom_blocked`,
+            draft_id: inspectId ?? "unknown",
+            status: "rejected",
+            rationale: `N2 venom gate blocked: ${venom.rationale}`,
+          };
+        }
+
         const report = await oracleEvaluate(a.draft, a.rubric_ids);
         return oraclePromote(a.draft, report, kernel.eights);
       },
@@ -279,7 +362,7 @@ export function registerTools(kernel: SmithKernel): ToolMap {
     },
     {
       name: "agentsmith.eights.evolution_propose",
-      description: "Propose an evolution of a resource via TheEights (eights.evolution.propose).",
+      description: "Propose an evolution of a resource via TheEights (eights.evolution.propose). Inspector gate (N7 — must allow) and N2 venom guard run before proposing; a non-allow verdict or blocked venom gate rejects without calling TheEights.",
       inputSchema: z.object({
         rid: z.string(),
         candidate_content: z.string(),
@@ -293,6 +376,38 @@ export function registerTools(kernel: SmithKernel): ToolMap {
           justification: string;
           evidence_memory_ids?: string[];
         };
+
+        // AS-GV-4: Inspector gate on the candidate_content. Use kind="agent" as the
+        // default artifact kind for raw evolution proposals (the caller should ideally
+        // pass a kind field; we treat the content as an opaque artifact for schema check).
+        // Require "allow" exactly — escalate/modify/deny all block (AS-GV-3).
+        const verdict = await inspectorGate(kernel, {
+          kind: "agent",
+          content: a.candidate_content,
+          id: a.rid,
+        });
+        if (verdict.outcome !== "allow") {
+          return {
+            ok: false,
+            status: "rejected",
+            rationale: `Inspector gate blocked (outcome=${verdict.outcome}): ${verdict.rationale} [cited: ${verdict.cited_invariants.join(", ")}]`,
+            inspector_verdict: verdict,
+            proposal_id: undefined,
+          };
+        }
+
+        // AS-GV-2: N2 venom guard before committing to TheEights.
+        // Issue 1 fix: include candidate_content in the args so the cross-check is meaningful.
+        const venom = await venomGuard(kernel, `agentsmith.eights.evolution_propose:${a.rid}`, { rid: a.rid, justification: a.justification, candidate_content: a.candidate_content });
+        if (!venom.allowed) {
+          return {
+            ok: false,
+            status: "rejected",
+            rationale: `N2 venom gate blocked: ${venom.rationale}`,
+            proposal_id: undefined,
+          };
+        }
+
         return kernel.eights.evolutionPropose(a);
       },
     },
@@ -369,4 +484,37 @@ export function registerTools(kernel: SmithKernel): ToolMap {
   const map: ToolMap = new Map();
   for (const t of tools) map.set(t.name, t);
   return map;
+}
+
+/**
+ * AS-GV-2 (fix 5): Build an N8-refusal tool map by WRAPPING the real tool set.
+ *
+ * Calls `registerTools(kernel)` to get the real ToolMap, then maps over every
+ * entry, keeping the real `name` and `inputSchema` but replacing each `handler`
+ * with a refusal closure. This guarantees exact name-set equality with the real
+ * tool map — no hand-maintained list that can drift.
+ *
+ * Used when the daemon boots but constitution attestation fails (mismatch,
+ * refused, or eights unreachable). The MCP server still answers `initialize`
+ * so the gateway doesn't time out, but every tool call returns the N8 refusal
+ * envelope.
+ */
+export function buildN8RefusalTools(kernel: SmithKernel, attestDetail: string): ToolMap {
+  const realTools = registerTools(kernel);
+  const refusalMap: ToolMap = new Map();
+  for (const [name, real] of realTools) {
+    refusalMap.set(name, {
+      name,
+      description: `[N8-REFUSAL] ${name} is unavailable: constitution unattested.`,
+      // Keep real inputSchema so ListTools reports correct parameter shapes.
+      inputSchema: real.inputSchema,
+      handler: async (_args) => ({
+        ok: false,
+        refused: true,
+        reason: "N8: constitution unattested/mismatch — tools refused",
+        detail: attestDetail,
+      }),
+    });
+  }
+  return refusalMap;
 }

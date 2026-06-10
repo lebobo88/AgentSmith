@@ -11,6 +11,28 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { McpClient, type BridgeLogger, type McpServerConfig } from "./mcp-client.js";
 
+/**
+ * Sink-gate references injected into EightsBridge at construction time.
+ *
+ * These let the bridge enforce governance at the send-side sink so NO caller
+ * (MCP handler, oracle/promotion.ts, spool replay) can bypass the gate.
+ *
+ * - `inspectContent(content)` — runs inspector.inspect on candidate_content;
+ *   returns outcome ("allow"|"deny"|"escalate"|"modify") + rationale.
+ * - `venomCheck(capability, args)` — calls hydra.venomCrossCheck; returns
+ *   ok===true only on a strict boolean true (not coerced).
+ * - `constitutionHash()` — returns the current local constitution hex hash;
+ *   compared against the boot-attested hash on every gated op (TOCTOU fix).
+ * - `bootAttestedHash` — the hash that was verified at boot; stored here so
+ *   the sink can compare recomputed hashes against it.
+ */
+export interface SinkGateRefs {
+  inspectContent: (content: string, id?: string) => Promise<{ outcome: string; rationale: string; cited_invariants: string[] }>;
+  venomCheck: (capability: string, args: unknown) => Promise<{ ok: boolean; rationale: string }>;
+  constitutionHash: () => string;
+  bootAttestedHash: string;
+}
+
 export interface EightsBridgeOptions {
   command?: string;
   args?: string[];
@@ -18,6 +40,13 @@ export interface EightsBridgeOptions {
   logger?: BridgeLogger;
   /** Override the on-disk spool dir. Defaults to ~/.agentsmith/eights-pending. */
   spoolDir?: string;
+  /**
+   * Sink-gate refs. When provided, evolutionPropose, evolutionCommit, and
+   * replayPendingProposals enforce inspector + venom + N8-TOCTOU checks before
+   * any network call to TheEights. When absent (tests that don't need gating),
+   * gating is skipped — the MCP handler layer is then responsible.
+   */
+  gate?: SinkGateRefs;
 }
 
 const DEFAULT_EIGHTS_ENTRY = "C:/AiAppDeployments/TheEights/daemon/dist/index.js";
@@ -113,6 +142,7 @@ export class EightsBridge {
   private readonly client: McpClient;
   private readonly log: BridgeLogger;
   private readonly spoolDir: string;
+  private readonly gate: SinkGateRefs | undefined;
 
   constructor(opts: EightsBridgeOptions = {}) {
     const command = opts.command ?? "node";
@@ -133,6 +163,83 @@ export class EightsBridge {
       } satisfies BridgeLogger);
     this.client = new McpClient(cfg, this.log);
     this.spoolDir = opts.spoolDir ?? join(homedir(), ".agentsmith", "eights-pending");
+    this.gate = opts.gate;
+  }
+
+  /**
+   * Sink-level governance gate. Called by evolutionPropose, evolutionCommit,
+   * and replayPendingProposals BEFORE any network call to TheEights.
+   *
+   * Three checks in order:
+   *   1. N8 TOCTOU: recompute constitutionHash(); must === bootAttestedHash.
+   *   2. Inspector: candidate_content must get outcome==="allow" exactly.
+   *   3. Venom (N2): venomCheck must return ok===true strictly.
+   *
+   * Returns { blocked: false } on pass; { blocked: true, reason } on any failure.
+   * FAIL CLOSED: if no gate is configured, propose/commit/replay are DENIED.
+   * There is no legitimate reason to reach TheEights mutating ops without a gate.
+   */
+  private async _runSinkGate(
+    candidate_content: string,
+    rid: string,
+    venomCapability: string,
+  ): Promise<{ blocked: false } | { blocked: true; reason: string }> {
+    if (!this.gate) {
+      return {
+        blocked: true,
+        reason: "N2/N7 sink gate not configured — failing closed (no gate injected at construction)",
+      };
+    }
+
+    // 1. N8 TOCTOU — recompute local constitution hash and compare to boot-attested.
+    let currentHash: string;
+    try {
+      currentHash = this.gate.constitutionHash();
+    } catch (err) {
+      return { blocked: true, reason: `N8: constitutionHash() threw at sink — ${String(err)}` };
+    }
+    if (currentHash !== this.gate.bootAttestedHash) {
+      this.log.warn(
+        { current: currentHash, boot: this.gate.bootAttestedHash },
+        "N8 TOCTOU: constitution hash drifted since boot — blocking propose/commit",
+      );
+      return { blocked: true, reason: `N8: constitution hash drifted since boot (TOCTOU)` };
+    }
+
+    // 2. Inspector gate — require outcome === "allow" exactly.
+    let verdict: { outcome: string; rationale: string; cited_invariants: string[] };
+    try {
+      verdict = await this.gate.inspectContent(candidate_content, rid);
+    } catch (err) {
+      return { blocked: true, reason: `Inspector threw at sink — ${String(err)}` };
+    }
+    if (verdict.outcome !== "allow") {
+      this.log.warn(
+        { outcome: verdict.outcome, rationale: verdict.rationale, rid },
+        "sink gate: Inspector blocked propose/commit",
+      );
+      return {
+        blocked: true,
+        reason: `Inspector blocked (outcome=${verdict.outcome}): ${verdict.rationale} [${verdict.cited_invariants.join(", ")}]`,
+      };
+    }
+
+    // 3. N2 Venom guard — venomCheck ok must be === true strictly.
+    let venomResult: { ok: boolean; rationale: string };
+    try {
+      venomResult = await this.gate.venomCheck(venomCapability, { rid, candidate_content });
+    } catch (err) {
+      return { blocked: true, reason: `N2: venom threw at sink (fail CLOSED) — ${String(err)}` };
+    }
+    if (venomResult.ok !== true) {
+      this.log.warn(
+        { ok: venomResult.ok, rationale: venomResult.rationale, rid },
+        "sink gate: venom blocked propose/commit (N2)",
+      );
+      return { blocked: true, reason: `N2: venom blocked: ${venomResult.rationale}` };
+    }
+
+    return { blocked: false };
   }
 
   /**
@@ -212,8 +319,27 @@ export class EightsBridge {
         summary.skipped += 1;
         continue;
       }
+
+      // Sink gate: re-run governance on every replay entry before sending.
+      // A mutable spool file could otherwise inject ungated proposals (Issue 2b).
+      // Entries that fail the gate are dropped (unlinked) and counted as skipped.
+      const gateResult = await this._runSinkGate(
+        parsed.args.candidate_content,
+        parsed.args.rid,
+        `replay:${parsed.args.rid}`,
+      );
+      if (gateResult.blocked) {
+        this.log.warn(
+          { file: fpath, reason: gateResult.reason },
+          "replay: sink gate blocked entry — dropping (not replaying)",
+        );
+        try { unlinkSync(fpath); } catch { /* best-effort */ }
+        summary.skipped += 1;
+        continue;
+      }
+
       try {
-        await this.client.call<{ proposal_id?: string; auto_committed?: boolean }>(
+        const r = await this.client.call<{ proposal_id?: string; auto_committed?: boolean; degraded?: unknown }>(
           "eights.evolution.propose",
           {
             envelope: smithEnvelope(),
@@ -223,6 +349,16 @@ export class EightsBridge {
             evidence_memory_ids: parsed.args.evidence_memory_ids ?? [],
           },
         );
+        // A downstream degraded response is NOT a successful send — keep the file
+        // for the next replay attempt (same as a transport failure).
+        if (r.degraded === true) {
+          this.log.warn(
+            { file: fpath, r },
+            "replay: downstream returned degraded — leaving for next attempt (not counted as sent)",
+          );
+          summary.failed += 1;
+          continue;
+        }
         try {
           unlinkSync(fpath);
         } catch (unlinkErr) {
@@ -302,8 +438,22 @@ export class EightsBridge {
     | { proposal_id: string; auto_committed: boolean }
     | (DegradedMarker & { proposal_id: string; auto_committed: boolean; spooled_id?: string })
   > {
+    // Sink gate: inspector + venom + N8 TOCTOU before any network call.
+    // This is the primary enforcement point — covers ALL callers (MCP handler,
+    // oracle/promotion.ts, and any future caller) regardless of the call path.
+    const gate = await this._runSinkGate(
+      input.candidate_content,
+      input.rid,
+      `evolutionPropose:${input.rid}`,
+    );
+    if (gate.blocked) {
+      this.log.warn({ rid: input.rid, reason: gate.reason }, "evolutionPropose: sink gate blocked");
+      return degraded({ proposal_id: "gate-blocked", auto_committed: false }, gate.reason);
+    }
+
     // Drain any prior degraded proposals first (fail-soft — never blocks the
     // new propose). The next successful propose effectively flushes the spool.
+    // Each spool entry is independently gated inside replayPendingProposals.
     try {
       const summary = await this.replayPendingProposals();
       if (summary.sent > 0 || summary.failed > 0 || summary.skipped > 0) {
@@ -321,7 +471,7 @@ export class EightsBridge {
     }
 
     try {
-      const r = await this.client.call<{ proposal_id?: string; auto_committed?: boolean }>(
+      const r = await this.client.call<{ proposal_id?: string; auto_committed?: boolean; degraded?: unknown }>(
         "eights.evolution.propose",
         {
           envelope: smithEnvelope(),
@@ -331,9 +481,22 @@ export class EightsBridge {
           evidence_memory_ids: input.evidence_memory_ids ?? [],
         },
       );
+      // Reject downstream degraded responses — a {degraded:true} body from TheEights
+      // is NOT a successful propose; spool it for later retry.
+      if (r.degraded === true) {
+        this.log.warn({ rid: input.rid, r }, "evolutionPropose: downstream returned degraded — spooling");
+        const spoolResult = this.spoolProposal(input, "eights-downstream-degraded");
+        const base = degraded(
+          { proposal_id: "degraded", auto_committed: false },
+          "eights-downstream-degraded",
+        );
+        return spoolResult.spooled ? { ...base, spooled_id: spoolResult.id } : base;
+      }
       return {
         proposal_id: r.proposal_id ?? "unknown",
-        auto_committed: Boolean(r.auto_committed),
+        // Strict boolean: only literal true counts as auto-committed.
+        // "false" (string), 1 (number), null, undefined all map to false.
+        auto_committed: r.auto_committed === true,
       };
     } catch (err) {
       this.log.warn({ err: String(err), tool: "eights.evolution.propose" }, "degraded");
@@ -350,12 +513,31 @@ export class EightsBridge {
     proposal_id: string;
     approver?: string;
   }): Promise<{ committed: boolean } | (DegradedMarker & { committed: boolean })> {
+    // Sink gate: commit is a write op; run N8 TOCTOU + venom before sending.
+    // We use the proposal_id as both content and rid for the gate check
+    // (commits don't carry candidate_content; N8+venom are still required).
+    const gate = await this._runSinkGate(
+      input.proposal_id,
+      input.proposal_id,
+      `evolutionCommit:${input.proposal_id}`,
+    );
+    if (gate.blocked) {
+      this.log.warn({ proposal_id: input.proposal_id, reason: gate.reason }, "evolutionCommit: sink gate blocked");
+      return degraded({ committed: false }, gate.reason);
+    }
+
     try {
-      const r = await this.client.call<{ committed?: boolean }>("eights.evolution.commit", {
+      const r = await this.client.call<{ committed?: boolean; degraded?: unknown }>("eights.evolution.commit", {
         envelope: smithEnvelope(),
         proposal_id: input.proposal_id,
       });
-      return { committed: Boolean(r.committed) };
+      // Reject downstream degraded responses — {degraded:true} body is NOT a successful commit.
+      if (r.degraded === true) {
+        this.log.warn({ proposal_id: input.proposal_id, r }, "evolutionCommit: downstream returned degraded — not committed");
+        return degraded({ committed: false }, "eights-downstream-degraded");
+      }
+      // Strict boolean: only literal true counts as committed.
+      return { committed: r.committed === true };
     } catch (err) {
       this.log.warn({ err: String(err), tool: "eights.evolution.commit" }, "degraded");
       return degraded({ committed: false }, "eights-mcp-unavailable");
@@ -394,13 +576,58 @@ export class EightsBridge {
     }
   }
 
+  /**
+   * Attest the local Smith constitution against TheEights' stored record.
+   *
+   * N8 contract: the receipt must exist AND `receipt.content_hash` must equal
+   * `"sha256:" + localHash` exactly. Any mismatch — including a degraded receipt,
+   * an absent hash, or a hash that doesn't match — is an N8 violation and the
+   * caller MUST boot in N8-refusal mode.
+   *
+   * The comparison hash is ALWAYS sourced internally from `this.gate.constitutionHash()`
+   * (injected at construction). A caller-supplied hash cannot override this — the
+   * gate is the only authoritative local source. If no gate is injected (no hash
+   * source), returns degraded("eights-attest-no-local-hash") immediately.
+   *
+   * TheEights' engine stores the content_hash with a `"sha256:"` prefix
+   * (see TheEights/daemon/src/engines/constitution.ts:103), so the comparison is:
+   *   receipt.content_hash === "sha256:" + resolvedLocalHash
+   *
+   * `traceId` is bound to the audit record in TheEights (workflow-intake binding).
+   */
   async constitutionAttest(
-    workflow_id: string,
+    traceId: string,
     consumer: EightsConsumer = DEFAULT_ATTEST_CONSUMER,
   ): Promise<AttestReceipt | (DegradedMarker & AttestReceipt)> {
+    // Hash is ALWAYS sourced internally — no external override permitted.
+    let resolvedLocalHash: string | undefined;
+    try {
+      resolvedLocalHash = this.gate?.constitutionHash();
+    } catch (err) {
+      this.log.warn(
+        { tool: "eights.constitution.attest", err: String(err) },
+        "attest: constitutionHash() threw — refusing (N8 requires comparison)",
+      );
+      return degraded(
+        { receipt_id: "degraded", hash: "0".repeat(64), consumer },
+        "eights-attest-hash-threw",
+      );
+    }
+    if (!resolvedLocalHash) {
+      this.log.warn(
+        { tool: "eights.constitution.attest" },
+        "attest: no gate/hash source available — refusing (N8 requires comparison)",
+      );
+      return degraded(
+        { receipt_id: "degraded", hash: "0".repeat(64), consumer },
+        "eights-attest-no-local-hash",
+      );
+    }
+
     try {
       // eights.constitution.attest returns a ConstitutionReceipt:
       // { consumer, rid, version, content_hash, attested_at, trace_id, receipt_signature }.
+      // content_hash = "sha256:<hex>" (with prefix — see ConstitutionEngine.attest:103).
       const r = await this.client.call<{
         consumer?: string;
         rid?: string;
@@ -409,10 +636,10 @@ export class EightsBridge {
         attested_at?: string;
         trace_id?: string;
         receipt_signature?: string;
-      }>("eights.constitution.attest", { envelope: smithEnvelope(workflow_id), consumer });
+      }>("eights.constitution.attest", { envelope: smithEnvelope(traceId), consumer });
       const signature = r.receipt_signature ?? "";
-      const hash = r.version ?? r.content_hash ?? "";
-      if (!signature || !hash) {
+      const content_hash = r.content_hash ?? "";
+      if (!signature || !content_hash) {
         // Reached the engine but got an unexpected shape — surface, don't fake a receipt.
         this.log.warn({ tool: "eights.constitution.attest", got: r }, "attest: unexpected response shape");
         return degraded(
@@ -420,9 +647,21 @@ export class EightsBridge {
           "eights-attest-bad-shape",
         );
       }
+      // N8 hash comparison — ALWAYS performed (Issue 3: mandatory, not optional).
+      const expected = `sha256:${resolvedLocalHash}`;
+      if (content_hash !== expected) {
+        this.log.warn(
+          { tool: "eights.constitution.attest", expected, got: content_hash },
+          "attest: content_hash mismatch — N8 violation",
+        );
+        return degraded(
+          { receipt_id: "unknown", hash: content_hash, consumer },
+          "eights-attest-hash-mismatch",
+        );
+      }
       return {
-        receipt_id: signature, // back-compat alias; the canonical id is receipt_signature
-        hash,
+        receipt_id: signature, // back-compat alias; canonical id is receipt_signature
+        hash: content_hash,
         receipt_signature: signature,
         consumer: r.consumer ?? consumer,
         version: r.version,

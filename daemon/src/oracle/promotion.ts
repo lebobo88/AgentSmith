@@ -69,6 +69,16 @@ export async function promote(
       candidate_content: d.content ?? "",
       justification: eval_report.rationale,
     });
+    // If the sink gate blocked the propose, the bridge returns a degraded marker
+    // (not an exception). Detect it and route to hitl_pending so the caller knows
+    // it was gated rather than silently queued.
+    if ("degraded" in resp && resp.degraded) {
+      return {
+        ...ticketBase,
+        status: "hitl_pending",
+        rationale: `eights propose blocked (degraded): ${(resp as { reason?: string }).reason ?? "unknown"}. ${eval_report.rationale}`,
+      };
+    }
     return {
       ...ticketBase,
       status: resp.auto_committed ? "auto_committed" : "queued",

@@ -52,10 +52,17 @@ export function checkSchema(input: SchemaCheckInput): SmithVerdict {
 
   const schema = PROJECT_SCHEMAS[project]?.[input.kind];
   if (!schema) {
-    return passVerdict(
-      now,
-      `no schema registered for (${project}, ${input.kind}) — pass`,
-    );
+    // AS-GV-5: N7 is fail-closed. No schema registered means we cannot verify
+    // compliance — return deny/escalate citing N7 rather than silently passing.
+    return {
+      outcome: "escalate",
+      rationale: `no schema registered for (${project}, ${input.kind}) — N7 requires compliance verification; escalating (AS-GV-5)`,
+      cited_invariants: ["N7"],
+      suggested_fix:
+        `Register a Zod schema for (${project}, ${input.kind}) in daemon/src/inspector/schemas/index.ts to enable verification.`,
+      evidence: [{ key: "project", value: project }, { key: "kind", value: input.kind }],
+      decided_at: now,
+    };
   }
 
   // Extract YAML payload: fenced frontmatter for most kinds; whole document for pure YAML.

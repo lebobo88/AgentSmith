@@ -29,9 +29,9 @@ import type { AnomalyEvent } from "./schemas/anomaly.js";
 import { Isolator } from "./quarantine/index.js";
 import { Registry } from "./keymaker/index.js";
 import { DecisionStore } from "./archivist/index.js";
-import { EightsBridge, HydraBridge, PpBridge, ConsumerBridge } from "./bridges/index.js";
+import { EightsBridge, HydraBridge, PpBridge, ConsumerBridge, type SinkGateRefs } from "./bridges/index.js";
 import { startMcpServer } from "./mcp/server.js";
-import { registerTools, type SmithKernel } from "./mcp/tools.js";
+import { registerTools, buildN8RefusalTools, type SmithKernel } from "./mcp/tools.js";
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -39,12 +39,15 @@ async function main(): Promise<void> {
   const log = makeLogger(cfg.logsDir);
 
   const inspector = new Inspector(cfg);
-  let hash = "uninitialized";
+  let hash: string;
   try {
     hash = inspector.constitutionHash();
     log.info({ constitution_sha256: hash }, "constitution sealed");
   } catch (err) {
-    log.warn({ err: String(err) }, "constitution not yet loadable; Phase 0 degraded");
+    // AS-GV-2: constitution unloadable — fatal, do NOT serve.
+    log.error({ err: String(err) }, "N8: constitution unloadable — refusing to serve (fatal)");
+    process.exitCode = 1;
+    return;
   }
 
   const factory = new Factory(cfg);
@@ -61,19 +64,32 @@ async function main(): Promise<void> {
     info: (o: Record<string, unknown>, m?: string) => log.info(o, m),
     debug: (o: Record<string, unknown>, m?: string) => log.debug(o, m),
   };
-  const eights = new EightsBridge({ logger: bridgeLogger });
-  const hydra = new HydraBridge({ logger: bridgeLogger });
-  const pp = new PpBridge({ logger: bridgeLogger });
-  const consumer = new ConsumerBridge(cfg);
 
   // NOTE: bridges are fully lazy — they connect (and spawn their child MCP
-  // server) only when a tool actually calls through them. We deliberately do
-  // NOT probe availability at boot: the old `eights.available()` probe spawned
-  // a child `node TheEights/daemon/dist/index.js` on every AgentSmith start,
-  // and the 1s race did not cancel the underlying connect, orphaning a child
-  // doing a slow cold-open against TheEights' large DB/WAL. Removing the probe
-  // eliminates a redundant long-lived Eights connection (which also fed WAL
-  // checkpoint starvation) and shaves boot time off the gateway's connect path.
+  // server) only when a tool actually calls through them.
+
+  // hydra and inspector must be constructed before eights so the sink gate
+  // refs can be injected at construction time. bootAttestedHash = hash (the
+  // local constitution hash verified above); the gate TOCTOU check recomputes
+  // and compares on every gated op to catch post-boot drift.
+  const hydra = new HydraBridge({ logger: bridgeLogger });
+
+  const sinkGate: SinkGateRefs = {
+    inspectContent: async (content: string, id?: string) => {
+      const v = await inspector.inspect({ kind: "agent", content, id });
+      return { outcome: v.outcome, rationale: v.rationale, cited_invariants: v.cited_invariants };
+    },
+    venomCheck: async (capability: string, args: unknown) => {
+      const r = await hydra.venomCrossCheck(capability, args);
+      return { ok: r.ok === true, rationale: r.rationale };
+    },
+    constitutionHash: () => inspector.constitutionHash(),
+    bootAttestedHash: hash,
+  };
+
+  const eights = new EightsBridge({ logger: bridgeLogger, gate: sinkGate });
+  const pp = new PpBridge({ logger: bridgeLogger });
+  const consumer = new ConsumerBridge(cfg);
 
   const kernel: SmithKernel = {
     cfg,
@@ -91,8 +107,52 @@ async function main(): Promise<void> {
     consumer,
   };
 
-  const tools = registerTools(kernel);
-  log.info({ tool_count: tools.size }, "agentsmith MCP tools registered");
+  // AS-GV-2 (fixed): N8 — attest the Smith constitution hash via TheEights at boot.
+  //
+  // The eights bridge now accepts `localHash` and compares the attested
+  // content_hash ("sha256:<hex>") to "sha256:" + localHash. Only an exact match
+  // selects normal tools. Any of the following boot in N8-refusal mode:
+  //   - eights unreachable / transport failure (degraded)
+  //   - constitution not registered in TheEights (refused)
+  //   - content_hash mismatch (drift)
+  //   - malformed/empty receipt
+  // Crash (process.exitCode=1, no serve) only on constitutionHash() throw above.
+  const tools = await (async () => {
+    let attestMode: "attested" | "n8-refusal" = "n8-refusal";
+    let attestDetail = "not attempted";
+    try {
+      // The bridge sources the local hash internally from sinkGate.constitutionHash().
+      // traceId = hash so the audit record binds this boot to this exact local hash.
+      const receipt = await eights.constitutionAttest(hash, "hydra");
+      if ("degraded" in receipt && receipt.degraded) {
+        const reason = (receipt as { reason: string }).reason;
+        attestDetail = `degraded: ${reason}`;
+        log.warn({ reason, local_sha256: hash }, "N8: constitution attest degraded/mismatch — booting in N8-refusal mode");
+      } else if (!receipt.receipt_id || receipt.receipt_id === "degraded" || !receipt.content_hash) {
+        attestDetail = "attest returned no valid receipt";
+        log.warn({ receipt, local_sha256: hash }, "N8: constitution attest returned no valid receipt — booting in N8-refusal mode");
+      } else {
+        // Exact match confirmed by bridge (content_hash === "sha256:" + hash).
+        attestMode = "attested";
+        attestDetail = `receipt=${receipt.receipt_id} content_hash=${receipt.content_hash}`;
+        log.info({ constitution_sha256: hash, receipt_id: receipt.receipt_id, content_hash: receipt.content_hash }, "N8: constitution attested — booting normally");
+      }
+    } catch (err) {
+      attestDetail = `attest threw: ${String(err)}`;
+      log.warn({ err: String(err), local_sha256: hash }, "N8: constitution attest threw — booting in N8-refusal mode");
+    }
+
+    if (attestMode === "attested") {
+      const realTools = registerTools(kernel);
+      log.info({ tool_count: realTools.size, mode: "attested" }, "agentsmith MCP tools registered");
+      return realTools;
+    }
+
+    // N8-refusal tool map: derived by wrapping real tool handlers (see buildN8RefusalTools).
+    const refusalTools = buildN8RefusalTools(kernel, attestDetail);
+    log.warn({ tool_count: refusalTools.size, mode: "n8-refusal", detail: attestDetail }, "agentsmith booted in N8-refusal mode — all tool calls will be refused");
+    return refusalTools;
+  })();
 
   // Wire tail watchers — best-effort. Each emitted event is classified;
   // a match publishes to the in-process watcher and seals a decision record.
