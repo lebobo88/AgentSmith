@@ -73,6 +73,10 @@ MCP tool responses over ~16 KB SHOULD NOT be inlined in the JSON response. Inste
 
 ---
 
+## Working Agreement
+
+**no-premature-done**: do not declare a task done until the full relevant test suite passes and the build is clean — a single new test passing is not done. A contract in a sibling module can break silently if only the new test is checked.
+
 ## Reference
 
 Architectural detail in `ARCHITECTURE.md`. Persona detail in `PERSONA.md`. Frozen invariants in `daemon/src/constitution/smith-constitution.md`.
