@@ -102,7 +102,7 @@ AgentSmith depends on three peer systems and governs eight consumer projects (th
               |  MarketBliss     |     (marketing-* squads)
               |  RLM-Creative    |     (garland squad)
               |  Senate          |     (legal-compliance squad — mesh-enrolled)
-              |  Xenia           |     (customer-support squad)
+              |  Xenia           |     (customer-support squad — mesh-enrolled)
               |  Hydra*          |     (* Hydra is also a peer)
               |  TheEights*      |     (* TheEights is also a peer)
               |  pair-programmer*|     (* p-p is also a peer)
@@ -270,7 +270,7 @@ The eight [sibling projects](https://github.com/lebobo88) (the Hydra squad sourc
 | Xenia            | support-crew drift, WS-AUTH capability enforcement, approval-gated execution invariants |
 | pair-programmer  | rubric integrity, judge eligibility gates |
 
-Senate and Xenia are **ACTIVE** Hydra squads (not stubs). Senate carries a `mesh-manifest.yaml`, so its AgentMesh enrollment is gated by Smith's `smith.manifest.inspect` structural inspection in addition to the standard `.claude/*` pre-tool hook path.
+Senate and Xenia are **ACTIVE** Hydra squads (not stubs). Both carry a `mesh-manifest.yaml` (Xenia enrolls three surfaces — `xenia`, `xenia-kb`, `xenia-tickets`), so their AgentMesh enrollment is gated by Smith's `smith.manifest.inspect` structural inspection in addition to the standard `.claude/*` pre-tool hook path.
 
 ---
 

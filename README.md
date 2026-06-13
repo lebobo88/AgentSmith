@@ -37,7 +37,7 @@ AgentSmith sits at the center of a Matrix-themed AI ecosystem. It is the inspect
 | [**MarketBliss**](https://github.com/lebobo88/MarketBliss) | Enterprise marketing platform; the five "marketing-*" squads | Governed |
 | [**RLM-Creative**](https://github.com/lebobo88/RLM-Creative) | Creative / media studio; the "garland" squad | Governed |
 | [**Senate**](https://github.com/lebobo88/Senate) | PhD-level legal wing, "the Curia": 12 jurists under the Twelve Tables; the "legal-compliance" squad. ACTIVE | Governed (mesh-enrolled) |
-| [**Xenia**](https://github.com/lebobo88/Xenia-Support) | Customer-support "Hearth": an 11-agent crew for triage, recommendation, VoC, and approval-gated execution; the "customer-support" squad. ACTIVE | Governed |
+| [**Xenia**](https://github.com/lebobo88/Xenia-Support) | Customer-support "Hearth": an 11-agent crew for triage, recommendation, VoC, and approval-gated execution; the "customer-support" squad. ACTIVE | Governed (mesh-enrolled) |
 
 And binding all of the above:
 
