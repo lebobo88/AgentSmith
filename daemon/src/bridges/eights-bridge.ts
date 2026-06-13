@@ -108,17 +108,26 @@ function degraded<T extends Record<string, unknown>>(extra: T, reason: string): 
   return { ...extra, degraded: true, reason };
 }
 
-/** The five consumers whose constitutions/resources TheEights governs. */
-type EightsConsumer = "eights" | "pp" | "hydra" | "execsuite" | "rlm";
+/** The known consumers whose constitutions/resources TheEights governs. */
+type EightsConsumer = "eights" | "pp" | "hydra" | "execsuite" | "rlm" | "agentsmith";
 
 /**
  * Consumer whose constitution AgentSmith binds a workflow to when attesting.
- * Defaults to "hydra" — the orchestrator's frozen Immortal Head. The "eights"
- * consumer has no constitution registered, so attesting against it always
- * refuses; attesting a Hydra-orchestrated workflow against the hydra
- * constitution is the semantically correct binding.
+ * Defaults to "agentsmith" — AgentSmith's OWN frozen Immortal Head registered
+ * under the "agentsmith" slot in TheEights (added alongside this change).
+ *
+ * Hash-alignment: TheEights seeds the "agentsmith" consumer by reading
+ * AgentSmith's own smith-constitution.md via siblingRoot("AgentSmith"), so
+ * eights' stored content_hash equals "sha256:" + sha256(smith-constitution.md,
+ * "utf8"), which is exactly what invariants.ts:loadConstitution() computes
+ * locally. Both sides use raw utf8 with no normalization, so the hashes are
+ * byte-identical and N8 attestation resolves to a clean match.
+ *
+ * Previously DEFAULT_ATTEST_CONSUMER was "hydra", which always failed because
+ * AgentSmith's local constitution hash (70a19de2…) differs from Hydra's
+ * (4060cb54…) — causing N8 to always fail-closed.
  */
-const DEFAULT_ATTEST_CONSUMER: EightsConsumer = "hydra";
+const DEFAULT_ATTEST_CONSUMER: EightsConsumer = "agentsmith";
 
 /**
  * AgentSmith's fixed read/propose Envelope for every governed eights MCP call.
