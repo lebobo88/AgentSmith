@@ -123,7 +123,11 @@ async function main(): Promise<void> {
     try {
       // The bridge sources the local hash internally from sinkGate.constitutionHash().
       // traceId = hash so the audit record binds this boot to this exact local hash.
-      const receipt = await eights.constitutionAttest(hash, "hydra");
+      // Attest against AgentSmith's OWN consumer slot (DEFAULT_ATTEST_CONSUMER
+      // = "agentsmith"): eights registers smith-constitution.md under that
+      // consumer, so content_hash === "sha256:" + this local hash. Passing
+      // "hydra" here (a different document) would always mismatch -> N8-refusal.
+      const receipt = await eights.constitutionAttest(hash);
       if ("degraded" in receipt && receipt.degraded) {
         const reason = (receipt as { reason: string }).reason;
         attestDetail = `degraded: ${reason}`;
