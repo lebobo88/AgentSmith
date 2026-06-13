@@ -1,11 +1,16 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { consumerRoots } from "../config.js";
 import type { SmithDecisionRecord } from "../schemas/decision-record.js";
 import type { EightsBridge } from "../bridges/index.js";
 
 const MAX_FILE_BYTES = 1024 * 1024; // 1MB cap
 const MAX_TRACE_LINES = 200;
-const DEFAULT_HYDRA_TAIL_DIR = "C:/AiAppDeployments/Hydra/.hydra";
+
+/** `<hydraRoot>/.hydra` — derived from consumerRoots (AIAPP_BASE/anchor based). */
+function defaultHydraTailDir(): string {
+  return join(consumerRoots()["hydra"]!, ".hydra");
+}
 
 export interface CrossSystemLink {
   source: "smith" | "hydra" | "eights";
@@ -123,7 +128,7 @@ export async function buildAudit(
 
   // (b) Hydra trace.jsonl, if a workflow_id is provided.
   if (query.workflow_id) {
-    const hydraDir = context.hydraTailDir ?? DEFAULT_HYDRA_TAIL_DIR;
+    const hydraDir = context.hydraTailDir ?? defaultHydraTailDir();
     const before = links.length;
     const hydra = readHydraTrace(query.workflow_id, hydraDir);
     if (hydra.length === 0) {

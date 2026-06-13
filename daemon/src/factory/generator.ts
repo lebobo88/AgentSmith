@@ -7,14 +7,15 @@ import {
   type ArtifactDraft,
   ARTIFACT_KINDS,
 } from "../schemas/artifact.js";
-import type { AgentSmithConfig } from "../config.js";
+import { type AgentSmithConfig, consumerBase } from "../config.js";
 import { resolveTemplate } from "./templates/index.js";
 import { renderMarkdown, type RiskClass, type TemplateOptions } from "./templates/types.js";
 
 /** Platform-appropriate default root for ad-hoc consumer projects. Read at
- *  call-time (not module-load) so tests can override via env. */
+ *  call-time (not module-load) so tests can override via env. Resolution:
+ *  AGENTSMITH_CONSUMER_BASE -> AIAPP_BASE -> dirname(repoRoot()). */
 function defaultConsumerBase(): string {
-  return process.env["AGENTSMITH_CONSUMER_BASE"] ?? "C:/AiAppDeployments";
+  return consumerBase();
 }
 
 /** Signals that mark a directory as a real consumer project root. */
@@ -27,8 +28,9 @@ const CONSUMER_PROJECT_SIGNALS = [".claude", "AGENTS.md", "CLAUDE.md"] as const;
  *   1. Explicit entry in `cfg.consumerRoots` (back-compat for the 7 legacy
  *      camelCase names: hydra, eights, executiveSuite, marketBliss,
  *      rlmCreative, pairProgrammer, agentSmith).
- *   2. Fallback: `<DEFAULT_CONSUMER_ROOTS_BASE>/<slug>` (default
- *      `C:/AiAppDeployments/<slug>`). The resolved directory must EXIST
+ *   2. Fallback: `<consumerBase()>/<slug>` (resolution:
+ *      AGENTSMITH_CONSUMER_BASE -> AIAPP_BASE -> dirname(repoRoot()), i.e.
+ *      `<AIAPP_BASE>/<slug>`). The resolved directory must EXIST
  *      and contain at least one of `.claude/`, `AGENTS.md`, or `CLAUDE.md`
  *      — otherwise a clear error is thrown listing all three signals.
  *

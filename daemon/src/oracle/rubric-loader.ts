@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { repoRoot } from "../config.js";
 
 export interface RubricCriterion {
   id: string;
@@ -21,7 +22,12 @@ export interface Rubric {
   hitl_on_fail: boolean;
 }
 
-const RUBRICS_DIR = process.env["AGENTSMITH_RUBRICS_DIR"] ?? "C:/AiAppDeployments/AgentSmith/rubrics";
+/** Rubrics directory. Resolution: AGENTSMITH_RUBRICS_DIR env (tier-1) ->
+ *  <repoRoot>/rubrics. Read at call-time so AGENTSMITH_REPO / anchor-walk
+ *  resolution applies and tests can override via env. */
+function rubricsDir(): string {
+  return process.env["AGENTSMITH_RUBRICS_DIR"] ?? join(repoRoot(), "rubrics");
+}
 const MAX_FILE_BYTES = 1024 * 1024; // 1MB cap
 
 const cache = new Map<string, Rubric>();
@@ -89,8 +95,9 @@ export function loadRubric(id: string): Rubric | null {
     if (hit) cache.set(id, hit);
     return hit ?? null;
   }
+  const dir = rubricsDir();
   for (const fname of candidateFileNames(id)) {
-    const full = join(RUBRICS_DIR, fname);
+    const full = join(dir, fname);
     const text = tryRead(full);
     if (!text) continue;
     try {
@@ -113,15 +120,16 @@ export function loadAllRubrics(): Rubric[] {
     return [...new Set(cache.values())];
   }
   const out: Rubric[] = [];
+  const dir = rubricsDir();
   try {
-    if (!existsSync(RUBRICS_DIR)) {
+    if (!existsSync(dir)) {
       allCacheLoaded = true;
       return out;
     }
-    const entries = readdirSync(RUBRICS_DIR);
+    const entries = readdirSync(dir);
     for (const e of entries) {
       if (!/\.(ya?ml)$/i.test(e)) continue;
-      const full = join(RUBRICS_DIR, e);
+      const full = join(dir, e);
       const text = tryRead(full);
       if (!text) continue;
       try {

@@ -2,7 +2,7 @@ import type { AnomalySignature } from "../schemas/anomaly.js";
 
 /**
  * Canonical Smith anomaly signature library.
- * Mirrors C:\AiAppDeployments\AgentSmith\.claude\skills\anomaly-signatures\SKILL.md.
+ * Mirrors .claude/skills/anomaly-signatures/SKILL.md in the AgentSmith repo.
  *
  * Slugs are stable identifiers; downstream tooling joins on them.
  * Patterns are JavaScript regex strings tested against AnomalyEvent.payload_summary.

@@ -3,18 +3,27 @@
  *
  * Default command is read from <pp-root>/.mcp.json (the `pp_harness` entry).
  * If the file isn't present, falls back to
- *   node C:/AiAppDeployments/pair-programmer/daemon/dist/index.js mcp
+ *   node <pairProgrammerRoot>/daemon/dist/index.js mcp
+ * where pairProgrammerRoot is derived from consumerRoots (AIAPP_BASE/anchor based).
  *
  * The pp_harness MCP server exposes tools with bare names (no namespace),
  * e.g. `start_best_of_stage`, `borda_count`, `archive_winner_and_losers`.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { resolve, isAbsolute } from "node:path";
+import { resolve, isAbsolute, join } from "node:path";
+import { consumerRoots } from "../config.js";
 import { McpClient, type BridgeLogger, type McpServerConfig } from "./mcp-client.js";
 
-const DEFAULT_PP_ROOT = "C:/AiAppDeployments/pair-programmer";
-const PP_MCP_JSON = `${DEFAULT_PP_ROOT}/.mcp.json`;
-const FALLBACK_ENTRY = `${DEFAULT_PP_ROOT}/daemon/dist/index.js`;
+/** pair-programmer repo root, derived from consumerRoots (AIAPP_BASE/anchor based). */
+function defaultPpRoot(): string {
+  return consumerRoots()["pairProgrammer"]!;
+}
+function ppMcpJson(): string {
+  return join(defaultPpRoot(), ".mcp.json");
+}
+function fallbackEntry(): string {
+  return join(defaultPpRoot(), "daemon", "dist", "index.js");
+}
 
 export interface PpBridgeOptions {
   command?: string;
@@ -44,15 +53,17 @@ interface McpJson {
 }
 
 function readPpHarnessEntry(): { command: string; args: string[]; env?: Record<string, string> } | null {
-  if (!existsSync(PP_MCP_JSON)) return null;
+  const ppRoot = defaultPpRoot();
+  const mcpJson = ppMcpJson();
+  if (!existsSync(mcpJson)) return null;
   try {
-    const text = readFileSync(PP_MCP_JSON, "utf8");
+    const text = readFileSync(mcpJson, "utf8");
     const j = JSON.parse(text) as McpJson;
     const entry = j.mcpServers?.["pp_harness"];
     if (!entry?.command || !entry.args) return null;
     // .mcp.json args are relative to project root; resolve them.
     const resolvedArgs = entry.args.map((a) =>
-      a.endsWith(".js") && !isAbsolute(a) ? resolve(DEFAULT_PP_ROOT, a) : a,
+      a.endsWith(".js") && !isAbsolute(a) ? resolve(ppRoot, a) : a,
     );
     return entry.env
       ? { command: entry.command, args: resolvedArgs, env: entry.env }
@@ -69,13 +80,14 @@ export class PpBridge {
   constructor(opts: PpBridgeOptions = {}) {
     const fromJson = readPpHarnessEntry();
     const command = opts.command ?? fromJson?.command ?? "node";
-    const args = opts.args ?? fromJson?.args ?? [FALLBACK_ENTRY, "mcp"];
+    const args = opts.args ?? fromJson?.args ?? [fallbackEntry(), "mcp"];
     const env = opts.env ?? fromJson?.env;
+    const ppRoot = defaultPpRoot();
     const cfg: McpServerConfig = {
       name: "pp",
       command,
       args,
-      ...(opts.cwd ? { cwd: opts.cwd } : existsSync(DEFAULT_PP_ROOT) ? { cwd: DEFAULT_PP_ROOT } : {}),
+      ...(opts.cwd ? { cwd: opts.cwd } : existsSync(ppRoot) ? { cwd: ppRoot } : {}),
       ...(env ? { env } : {}),
     };
     this.log =

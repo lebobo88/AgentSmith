@@ -9,9 +9,13 @@
  * Default command: `python -m mcp_servers.executive_suite` with cwd=<Hydra root>.
  */
 import { existsSync } from "node:fs";
+import { consumerRoots } from "../config.js";
 import { McpClient, type BridgeLogger, type McpServerConfig } from "./mcp-client.js";
 
-const DEFAULT_HYDRA_ROOT = "C:/AiAppDeployments/Hydra";
+/** Hydra repo root, derived from consumerRoots (AIAPP_BASE/anchor based). */
+function defaultHydraRoot(): string {
+  return consumerRoots()["hydra"]!;
+}
 
 export interface HydraBridgeOptions {
   command?: string;
@@ -35,7 +39,8 @@ export class HydraBridge {
   private readonly log: BridgeLogger;
 
   constructor(opts: HydraBridgeOptions = {}) {
-    const cwd = opts.cwd ?? (existsSync(DEFAULT_HYDRA_ROOT) ? DEFAULT_HYDRA_ROOT : process.cwd());
+    const hydraRoot = defaultHydraRoot();
+    const cwd = opts.cwd ?? (existsSync(hydraRoot) ? hydraRoot : process.cwd());
     const cfg: McpServerConfig = {
       name: "hydra",
       command: opts.command ?? "python",

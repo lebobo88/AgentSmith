@@ -174,8 +174,10 @@ const mcp: TemplateFn = (slug) => ({
     {
       mcpServers: {
         [slug]: {
+          // Relative to the consumer project's own cwd, matching pair-programmer's
+          // .mcp.json convention (relative `.js` args resolved against project root).
           command: "node",
-          args: ["C:/AiAppDeployments/AgentSmith/daemon/dist/index.js"],
+          args: ["daemon/dist/index.js"],
           env: {
             AGENTSMITH_HOME: "${HOME}/.agentsmith",
             LOG_LEVEL: "info",

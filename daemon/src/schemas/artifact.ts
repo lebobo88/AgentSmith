@@ -38,7 +38,7 @@ export type KnownConsumerProject = (typeof KNOWN_CONSUMER_PROJECTS)[number];
  *   - The legacy camelCase names in KNOWN_CONSUMER_PROJECTS (back-compat).
  *   - Any kebab-case slug starting with a letter (e.g. "rlm-platform",
  *     "consumer-project-x"). The factory resolves these to
- *     `C:\AiAppDeployments\<slug>` if no explicit `consumerRoots[<slug>]`
+ *     `<AIAPP_BASE>/<slug>` if no explicit `consumerRoots[<slug>]`
  *     is configured.
  *
  * The regex blocks injection / path-traversal nonsense (no slashes, dots,

@@ -2,9 +2,13 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { nanoid } from "nanoid";
 import { tailJsonlFile } from "./tail.js";
+import { consumerRoots } from "../config.js";
 import type { AnomalyEvent, AnomalySeverity } from "../schemas/anomaly.js";
 
-const DEFAULT_HYDRA_ROOT = "C:/AiAppDeployments/Hydra/.hydra";
+/** `<hydraRoot>/.hydra` — derived from consumerRoots (AIAPP_BASE/anchor based). */
+function defaultHydraRoot(): string {
+  return join(consumerRoots()["hydra"]!, ".hydra");
+}
 const SCAN_INTERVAL_MS = 5000;
 
 export interface HydraTailOptions {
@@ -22,7 +26,7 @@ export function startHydraTail(
   onEvent: (event: AnomalyEvent) => void,
   options: HydraTailOptions = {}
 ): { stop: () => void } {
-  const root = options.hydraRoot ?? DEFAULT_HYDRA_ROOT;
+  const root = options.hydraRoot ?? defaultHydraRoot();
   const interval = options.scanIntervalMs ?? SCAN_INTERVAL_MS;
   const onError = options.onError ?? (() => undefined);
 

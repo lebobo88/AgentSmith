@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { McpClient, type BridgeLogger, type McpServerConfig } from "./mcp-client.js";
+import { consumerRoots } from "../config.js";
 
 /**
  * Sink-gate references injected into EightsBridge at construction time.
@@ -49,7 +50,11 @@ export interface EightsBridgeOptions {
   gate?: SinkGateRefs;
 }
 
-const DEFAULT_EIGHTS_ENTRY = "C:/AiAppDeployments/TheEights/daemon/dist/index.js";
+/** `<TheEights>/daemon/dist/index.js`, derived from consumerRoots
+ *  (AIAPP_BASE/anchor based). */
+function defaultEightsEntry(): string {
+  return join(consumerRoots()["eights"]!, "daemon", "dist", "index.js");
+}
 
 /**
  * Payload shape persisted to disk in the eights-pending spool.
@@ -146,9 +151,7 @@ export class EightsBridge {
 
   constructor(opts: EightsBridgeOptions = {}) {
     const command = opts.command ?? "node";
-    const args =
-      opts.args ??
-      (existsSync(DEFAULT_EIGHTS_ENTRY) ? [DEFAULT_EIGHTS_ENTRY] : [DEFAULT_EIGHTS_ENTRY]);
+    const args = opts.args ?? [defaultEightsEntry()];
     const cfg: McpServerConfig = {
       name: "eights",
       command,

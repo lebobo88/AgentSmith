@@ -1,14 +1,14 @@
 {
   "hooks": {
-    "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File C:/AiAppDeployments/AgentSmith/.claude/hooks/agentsmith-doctor.ps1"}]}],
-    "UserPromptSubmit": [{"matcher": "*", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File C:/AiAppDeployments/AgentSmith/.claude/hooks/agentsmith-keymaker.ps1"}]}],
+    "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/agentsmith-doctor.ps1\""}]}],
+    "UserPromptSubmit": [{"matcher": "*", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/agentsmith-keymaker.ps1\""}]}],
     "PreToolUse": [
-      {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File C:/AiAppDeployments/AgentSmith/.claude/hooks/agentsmith-inspect.ps1"}]},
-      {"matcher": "mcp__hydra__.*", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File C:/AiAppDeployments/AgentSmith/.claude/hooks/agentsmith-venom-cross-check.ps1"}]}
+      {"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/agentsmith-inspect.ps1\""}]},
+      {"matcher": "mcp__hydra__.*", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/agentsmith-venom-cross-check.ps1\""}]}
     ],
     "PostToolUse": [
-      {"matcher": "mcp__pp_harness__finalize_run|mcp__eights__evolution_commit", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File C:/AiAppDeployments/AgentSmith/.claude/hooks/agentsmith-archivist.ps1"}]}
+      {"matcher": "mcp__pp_harness__finalize_run|mcp__eights__evolution_commit", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/agentsmith-archivist.ps1\""}]}
     ],
-    "Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File C:/AiAppDeployments/AgentSmith/.claude/hooks/agentsmith-flush.ps1"}]}]
+    "Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/agentsmith-flush.ps1\""}]}]
   }
 }

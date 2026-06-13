@@ -34,19 +34,33 @@ try {
     } catch { }
     if (-not $mcpOk) { $reasons += 'mcp:agentsmith not registered (directly or via hydra_gateway backends.json)' }
 
+    # Resolve repo root (AGENTSMITH_REPO -> $CLAUDE_PROJECT_DIR -> hook's own
+    # ancestor) and the shared base that holds the sibling projects
+    # (AGENTSMITH_CONSUMER_BASE -> AIAPP_BASE -> parent of repo root). No
+    # hardcoded machine-specific absolute paths.
+    $repoRoot = $env:AGENTSMITH_REPO
+    if ([string]::IsNullOrWhiteSpace($repoRoot)) { $repoRoot = $env:CLAUDE_PROJECT_DIR }
+    if ([string]::IsNullOrWhiteSpace($repoRoot)) {
+        # hook lives at <repoRoot>/.claude/hooks/agentsmith-doctor.ps1
+        $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    }
+    $base = $env:AGENTSMITH_CONSUMER_BASE
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = $env:AIAPP_BASE }
+    if ([string]::IsNullOrWhiteSpace($base)) { $base = Split-Path -Parent $repoRoot }
+
     # (b) constitution file exists
-    $constitution = 'C:\AiAppDeployments\AgentSmith\daemon\src\constitution\smith-constitution.md'
+    $constitution = Join-Path $repoRoot 'daemon\src\constitution\smith-constitution.md'
     $constOk = Test-Path -LiteralPath $constitution
     if (-not $constOk) { $reasons += "constitution missing: $constitution" }
 
     # (c) at least 3 of 5 sibling project roots reachable
     $siblings = @(
-        'C:\AiAppDeployments\Hydra',
-        'C:\AiAppDeployments\TheEights',
-        'C:\AiAppDeployments\ExecutiveSuite',
-        'C:\AiAppDeployments\MarketBliss',
-        'C:\AiAppDeployments\RLM-Creative',
-        'C:\AiAppDeployments\pair-programmer'
+        (Join-Path $base 'Hydra'),
+        (Join-Path $base 'TheEights'),
+        (Join-Path $base 'ExecutiveSuite'),
+        (Join-Path $base 'MarketBliss'),
+        (Join-Path $base 'RLM-Creative'),
+        (Join-Path $base 'pair-programmer')
     )
     $reachable = ($siblings | Where-Object { Test-Path -LiteralPath $_ }).Count
     if ($reachable -lt 3) { $reasons += "only $reachable/6 sibling roots reachable" }

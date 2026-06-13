@@ -13,7 +13,7 @@ runtime:
   # lives at daemon/dist/index.js — "dist/index.js" never existed at the repo root
   # and produced a broken spawn spec in ~/.hydra/backends.json (degraded status).
   entrypoint: "daemon/dist/index.js"
-  cwd: "C:/AiAppDeployments/AgentSmith"
+  cwd: "${AGENTSMITH_REPO}"
   healthProbe:
     type: mcp-tool-call
     # agentsmith.inspector.invariants_list: cheap no-args read returning constitution_sha256 + invariants list.
@@ -83,8 +83,8 @@ audit:
   dedupeKeyField: "id"
 
 governance:
-  # Constitution file path relative to runtime.cwd (C:/AiAppDeployments/AgentSmith).
-  # Verified to exist: C:/AiAppDeployments/AgentSmith/daemon/src/constitution/smith-constitution.md
+  # Constitution file path relative to runtime.cwd (${AGENTSMITH_REPO}).
+  # Resolves to <AGENTSMITH_REPO>/daemon/src/constitution/smith-constitution.md
   constitutionPath: "daemon/src/constitution/smith-constitution.md"
   # Tool used by meshd to attest the constitution hash.
   # Source: AgentSmith/daemon/src/mcp/tools.ts — "agentsmith.constitution.attest"
