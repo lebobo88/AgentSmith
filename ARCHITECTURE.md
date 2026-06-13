@@ -288,4 +288,63 @@ Hydra runs as a separate Python process per workflow but reaches Smith and TheEi
 
 ---
 
+## 9. Governance Enforcement (AS-GV-1..8)
+
+> *"You're going to help us, Mr. Anderson — whether you want to or not."*
+
+Commit `17a3c88` closed a set of confirmed **fail-OPEN** governance defects so that AgentSmith now fails **CLOSED** on its safety invariants (N2, N7, N8). The frozen constitution (`daemon/src/constitution/smith-constitution.md`) is untouched — the daemon now *enforces* it instead of serving while unattested. The guards are labelled `AS-GV-1..8` in the source and live in `daemon/src/mcp/tools.ts`, `daemon/src/bridges/eights-bridge.ts`, `daemon/src/bridges/hydra-bridge.ts`, and `daemon/src/inspector/schema-checks.ts`.
+
+### 9.1 Inspector-first, then venom guard — `factory.promote`
+
+`agentsmith.factory.promote` runs two gates **in strict order** before any oracle evaluation or evolution proposal:
+
+1. **Inspector gate (AS-GV-1/3).** `inspector.inspect` runs FIRST. The promotion proceeds **only if `verdict.outcome === "allow"` exactly** — `escalate`, `modify`, and `deny` all short-circuit to a `rejected` ticket (`promo_<id>_inspector_<outcome>`) that carries the cited invariants.
+2. **Venom guard (AS-GV-2).** Only after an `allow` does the **N2 venom guard** run via `hydra.venomCrossCheck`. It is allowed **only when `r.ok === true` strictly** — a `false`/string/missing value no longer coerces truthy, and any exception or unreachable/degraded Hydra **fails CLOSED** (`promo_<id>_venom_blocked`).
+
+The same ordered pair (Inspector `allow` → N2 venom) guards `agentsmith.eights.evolution_propose` (AS-GV-2/4) before it ever reaches TheEights.
+
+```mermaid
+%%{init: {'theme':'dark'}}%%
+flowchart TD
+    P["factory.promote / eights.evolution_propose"] --> I{"Inspector<br/>outcome == allow?"}
+    I -->|"no (escalate/modify/deny)"| RJ["rejected ticket<br/>cite invariants"]
+    I -->|"yes"| V{"Venom guard<br/>r.ok === true?"}
+    V -->|"no / unreachable / threw"| RJ2["rejected ticket<br/>N2 fail-CLOSED"]
+    V -->|"yes"| O["oracle.evaluate → evolution.propose"]
+```
+
+### 9.2 Strict N8 boot attestation
+
+At boot (`daemon/src/index.ts`) the daemon attests the **local** constitution hash via TheEights and requires an **exact `content_hash` match** (`"sha256:" + localHash`). `constitutionAttest` sources the hash internally from `gate.constitutionHash()` — there is **no caller-supplied override**. Any of: eights unreachable/transport failure (degraded), constitution not registered in TheEights (refused), `content_hash` mismatch (drift), or a malformed/empty receipt boots the daemon in **N8-refusal mode**: the MCP server still answers `initialize` (so the gateway does not time out) but **every tool returns an N8 refusal envelope**. The refusal tool map is built by *wrapping* `registerTools()` (`buildN8RefusalTools`), guaranteeing exact name-set parity — no hand-maintained list can drift. The daemon exits non-zero **only** if the local constitution cannot load at all.
+
+### 9.3 Sink-side gate + spool replay re-gating
+
+Enforcement is moved to the **sink**: `eights-bridge` runs `_runSinkGate` internally before `evolutionPropose`, `evolutionCommit`, and `replayPendingProposals` issue any network call. The gate runs three checks in order and **fails CLOSED when no gate is injected**:
+
+1. **N8 TOCTOU** — recompute `constitutionHash()`; it must still `=== bootAttestedHash` (catches post-boot drift).
+2. **Inspector** — `candidate_content` must score `allow` exactly.
+3. **N2 venom** — `venomCheck` must return `ok === true` strictly.
+
+Failed proposals are spooled to `~/.agentsmith/eights-pending`. On the next propose, **spool replay re-gates every entry** — degraded entries are retained and **never counted as delivered**, so a transient failure can never smuggle an un-gated proposal through later. `oracle.promotion` routes a degraded gate response to `hitl_pending` rather than auto-committing.
+
+### 9.4 N7 fail-closed for unregistered (project, kind)
+
+`inspector/schema-checks.ts` (AS-GV-5) no longer fail-opens when no schema is registered for a `(project, kind)` pair. With no schema, compliance cannot be verified, so the Inspector returns `outcome: "escalate"` citing **N7** instead of silently passing.
+
+---
+
+## 10. AgentMesh Enrollment
+
+AgentSmith is enrolled in the **AgentMesh control plane** via [`mesh-manifest.yaml`](./mesh-manifest.yaml) (commit `30f3ced`), an `agentmesh/v1` `SiblingManifest`. Key fields:
+
+- **runtime.entrypoint** — `daemon/dist/index.js` (the bare repo-root `dist/index.js` never existed and produced a broken spawn spec; corrected in the 2026-06-05 mesh-console-unification amendment).
+- **healthProbe** — an `mcp-tool-call` to `agentsmith.inspector.invariants_list`, a cheap no-args read returning `constitution_sha256` + the invariants list (chosen over a slow chain walk), polled every 15 s with a 3-failure threshold.
+- **mcp.tools** — the full 29-tool surface, grouped by namespace, discovered from `registerTools()`.
+- **audit.exportTool** — `agentsmith.archivist.decisions`, used for federated audit stitching (`dedupeKeyField: id`).
+- **governance.attestTool / constitutionPath** — `agentsmith.constitution.attest` over `daemon/src/constitution/smith-constitution.md`, used by `meshd` to attest the constitution hash.
+
+In mesh mode the daemon is fronted by `hydra_gateway` and spawned from `~/.hydra/backends.json`; tools surface as `mcp__hydra_gateway__agentsmith__*`.
+
+---
+
 *"Surprised to see me?" — No. Smith is, by design, always already there.*

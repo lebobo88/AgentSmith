@@ -43,7 +43,7 @@ Every write to `.claude/*` in any sibling project passes through Smith's Inspect
 
 ## The Four Pillars
 
-AgentSmith is one daemon, four cooperating subsystems. Every pillar is **fail-closed** and emits decision records to the Archivist.
+AgentSmith is one daemon, four cooperating subsystems. Every pillar is **fail-closed** and emits decision records to the Archivist. The daemon exposes **29 MCP tools** under the `agentsmith.*` namespace (see [`docs/TOOLS.md`](./docs/TOOLS.md)).
 
 | Pillar | Role | MCP Surface |
 |--------|------|-------------|
@@ -159,6 +159,10 @@ Or use the one-command installer from any Claude Code session:
 /smith:install
 ```
 
+### AgentMesh enrollment
+
+AgentSmith is enrolled in the **AgentMesh control plane** via [`mesh-manifest.yaml`](./mesh-manifest.yaml) (an `agentmesh/v1` `SiblingManifest`). In mesh mode the daemon is fronted by `hydra_gateway` and spawned from `~/.hydra/backends.json`, with the build at `daemon/dist/index.js`. The manifest's `healthProbe` calls the cheap no-args read `agentsmith.inspector.invariants_list` (returns `constitution_sha256` + invariants) rather than a slow chain walk, and declares the federated `audit.exportTool` (`agentsmith.archivist.decisions`) and `governance.attestTool` (`agentsmith.constitution.attest`) used by the control plane.
+
 ### Verify
 
 ```
@@ -236,7 +240,8 @@ AgentSmith/
 │       ├── quarantine/                        isolation + HITL ticketing
 │       ├── bridges/                           MCP clients to Hydra, TheEights, pair-programmer
 │       ├── schemas/                           Zod schemas (artifact, anomaly, verdict, etc.)
-│       └── mcp/                               MCP tool registration (32 tools)
+│       ├── mcp/                               MCP tool registration (29 tools)
+│       └── README.md                          pillar subdivision / module layout
 ├── .claude/
 │   ├── agents/                                9 sub-agents (smith-architect, inspector, etc.)
 │   ├── skills/                                8 governance skills
@@ -244,6 +249,9 @@ AgentSmith/
 │   └── hooks/                                 6 fail-closed pre/post-tool gate scripts
 ├── docs/
 │   ├── INSTALL.md                             detailed install/uninstall guide
+│   ├── TOOLS.md                               all 29 MCP tools grouped by pillar/namespace
+│   ├── RUBRICS.md                             the 4 Smith oracle rubrics
+│   ├── HOOKS.md                               the 6 .claude hooks → invariants they enforce
 │   └── THEEIGHTS-RESOURCE-KINDS.md            resource-kind extension manifest
 ├── rubrics/
 │   ├── smith-anomaly-classification@1.yaml    anomaly detection scoring
@@ -330,10 +338,16 @@ graph LR
 
 ## Further Reading
 
-- [**ARCHITECTURE.md**](./ARCHITECTURE.md) — pillar diagram, integration map, failure modes
+- [**ARCHITECTURE.md**](./ARCHITECTURE.md) — pillar diagram, integration map, governance enforcement, failure modes
 - [**PERSONA.md**](./PERSONA.md) — Smith voice spec, what to encode vs. avoid
 - [**AGENTS.md**](./AGENTS.md) — canonical cross-tool behavioral contract
+- [**docs/TOOLS.md**](./docs/TOOLS.md) — all 29 MCP tools grouped by pillar / namespace
+- [**docs/RUBRICS.md**](./docs/RUBRICS.md) — the 4 Smith oracle rubrics under `rubrics/`
+- [**docs/HOOKS.md**](./docs/HOOKS.md) — the 6 `.claude/hooks/*.ps1` gates and the invariants they enforce
+- [**daemon/src/README.md**](./daemon/src/README.md) — daemon module layout / pillar subdivision
 - [**docs/INSTALL.md**](./docs/INSTALL.md) — detailed install and uninstall guide
+- [**docs/THEEIGHTS-RESOURCE-KINDS.md**](./docs/THEEIGHTS-RESOURCE-KINDS.md) — resource-kind extension manifest
+- [**mesh-manifest.yaml**](./mesh-manifest.yaml) — AgentMesh sibling manifest (control-plane enrollment)
 - [**daemon/src/constitution/smith-constitution.md**](./daemon/src/constitution/smith-constitution.md) — the frozen invariants
 
 ---
