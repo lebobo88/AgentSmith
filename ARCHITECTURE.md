@@ -61,7 +61,7 @@ AgentSmith is one daemon, four cooperating subsystems. Every pillar is fail-clos
 
 ## 2. Integration Map
 
-AgentSmith depends on three peer systems and governs six consumer projects. Below is the canonical ASCII map.
+AgentSmith depends on three peer systems and governs eight consumer projects (the Hydra squad source-packs plus the three peers), and is itself the structural-inspection gate that the **AgentMesh** control plane calls at enrollment. Below is the canonical ASCII map.
 
 ```
                                     +------------------+
@@ -95,17 +95,38 @@ AgentSmith depends on three peer systems and governs six consumer projects. Belo
            |                           |
            +-----------+---------------+
                        v
-              +----------------+
-              | CONSUMER PROJECTS |
-              +----------------+
-              |  ExecutiveSuite |
-              |  MarketBliss    |
-              |  RLM-Creative   |
-              |  Hydra*         |     (* Hydra is also a peer)
-              |  TheEights*     |     (* TheEights is also a peer)
-              |  pair-programmer*|    (* p-p is also a peer)
-              +----------------+
+              +------------------+
+              | CONSUMER PROJECTS  |   (Hydra squad source-packs)
+              +------------------+
+              |  ExecutiveSuite  |     (executive squad)
+              |  MarketBliss     |     (marketing-* squads)
+              |  RLM-Creative    |     (garland squad)
+              |  Senate          |     (legal-compliance squad — mesh-enrolled)
+              |  Xenia           |     (customer-support squad)
+              |  Hydra*          |     (* Hydra is also a peer)
+              |  TheEights*      |     (* TheEights is also a peer)
+              |  pair-programmer*|     (* p-p is also a peer)
+              +------------------+
+
+
+       +-----------------------------+
+       |  AgentMesh  (control plane) |
+       |  registry / lifecycle /     |
+       |  audit / protocol edge      |
+       +--------------+--------------+
+                      |
+                      |  enrollment gate:
+                      |  smith.manifest.inspect
+                      |  (fail-CLOSED: schema +
+                      |   constitution attest +
+                      |   AgentSmith inspection)
+                      v
+                +------------------+
+                |    AgentSmith    |   <-- structural inspection step
+                +------------------+
 ```
+
+AgentMesh enrolls each sibling by validating its `mesh-manifest.yaml` — and that gate is **fail-closed only because all three of** JSON-Schema validation, TheEights constitution attestation, and **AgentSmith structural inspection** must pass. AgentMesh enforces no governance of its own; authority stays with TheEights -> AgentSmith -> Hydra. It routes and observes; it does not arbitrate.
 
 ---
 
@@ -231,7 +252,7 @@ AgentSmith ships rubrics under `rubrics/`:
 
 ## 6. Consumer Projects
 
-The six [sibling projects](https://github.com/lebobo88) are AgentSmith's governance domain. Each gets:
+The eight [sibling projects](https://github.com/lebobo88) (the Hydra squad source-packs plus the three peers) are AgentSmith's governance domain. Each gets:
 
 1. **A pre-tool hook** installed in `.claude/hooks/` that calls `agentsmith.inspector.validate` before any write-shaped tool call to `.claude/*`.
 2. **A `/smith:*` command surface** wired through the user-scope MCP registration.
@@ -245,7 +266,11 @@ The six [sibling projects](https://github.com/lebobo88) are AgentSmith's governa
 | ExecutiveSuite   | exec persona drift, board protocol invariants |
 | MarketBliss      | data-source provenance, output reproducibility |
 | RLM-Creative     | render budget, asset-license invariants |
+| Senate           | jurist roster drift, Law-of-Citations integrity, Tribune's-Veto (HITL) gate; mesh-manifest enrollment inspection |
+| Xenia            | support-crew drift, WS-AUTH capability enforcement, approval-gated execution invariants |
 | pair-programmer  | rubric integrity, judge eligibility gates |
+
+Senate and Xenia are **ACTIVE** Hydra squads (not stubs). Senate carries a `mesh-manifest.yaml`, so its AgentMesh enrollment is gated by Smith's `smith.manifest.inspect` structural inspection in addition to the standard `.claude/*` pre-tool hook path.
 
 ---
 
@@ -344,6 +369,10 @@ AgentSmith is enrolled in the **AgentMesh control plane** via [`mesh-manifest.ya
 - **governance.attestTool / constitutionPath** — `agentsmith.constitution.attest` over `daemon/src/constitution/smith-constitution.md`, used by `meshd` to attest the constitution hash.
 
 In mesh mode the daemon is fronted by `hydra_gateway` and spawned from `~/.hydra/backends.json`; tools surface as `mcp__hydra_gateway__agentsmith__*`.
+
+### 10.1 AgentSmith as the enrollment inspection gate
+
+The relationship is bidirectional. AgentSmith does not merely enroll *itself* — it is the **structural inspection step** the AgentMesh control plane (`meshd`) calls when **any** sibling enrolls. AgentMesh validates a candidate's `mesh-manifest.yaml` fail-closed: JSON-Schema validation + TheEights constitution attestation + **AgentSmith structural inspection** (`smith.manifest.inspect`) must *all* pass, or enrollment is refused. So every mesh-enrolled project — including the active `Senate` squad, which ships a `mesh-manifest.yaml` — passes through Smith's Inspector at enrollment, in addition to the per-write `.claude/*` pre-tool hook path. AgentMesh enforces no governance of its own; the precedence order remains TheEights -> AgentSmith -> Hydra. AgentMesh routes and observes; it does not arbitrate.
 
 ---
 

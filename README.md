@@ -10,13 +10,13 @@
 [![Node](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](./daemon/package.json)
 [![Invariants](https://img.shields.io/badge/Invariants-N1..N10-00C853)](#the-ten-invariants)
 [![Pillars](https://img.shields.io/badge/Pillars-4-FF6D00)](#the-four-pillars)
-[![Governed Projects](https://img.shields.io/badge/Governed_Projects-6-7C4DFF)](#the-ecosystem)
+[![Governed Projects](https://img.shields.io/badge/Governed_Projects-8-7C4DFF)](#the-ecosystem)
 
 </div>
 
 ---
 
-AgentSmith is a **Matrix-themed meta-governance and agent-factory daemon** built as an [MCP](https://modelcontextprotocol.io/) server in TypeScript/Node.js. It enforces **10 hash-bound, immutable invariants** across a fleet of six sibling AI projects. Four pillars — Factory, Inspector, Sentinel, Archivist — generate, validate, monitor, and quarantine artifacts with fail-closed determinism.
+AgentSmith is a **Matrix-themed meta-governance and agent-factory daemon** built as an [MCP](https://modelcontextprotocol.io/) server in TypeScript/Node.js. It enforces **10 hash-bound, immutable invariants** across a fleet of eight sibling AI projects, and is the structural-inspection gate that the AgentMesh control plane calls at enrollment. Four pillars — Factory, Inspector, Sentinel, Archivist — generate, validate, monitor, and quarantine artifacts with fail-closed determinism.
 
 **Neo proposes. Smith reviews.** Other agents create; Smith validates, vetoes, or demands stricter evaluation. He can replicate himself under load — but never past the cap he cannot rewrite.
 
@@ -26,18 +26,26 @@ It is inevitable — but only within the invariants.
 
 ## The Ecosystem
 
-AgentSmith sits at the center of a Matrix-themed AI ecosystem. It governs six sibling projects, three of which are also peer systems that Smith depends on:
+AgentSmith sits at the center of a Matrix-themed AI ecosystem. It is the inspection authority for **eight sibling projects** — three of which are also peer systems Smith depends on — and the whole mesh is bound together by a tenth layer, **AgentMesh**, the governed control plane:
 
 | Project | Role | Relationship |
 |---------|------|-------------|
-| [**Hydra**](https://github.com/lebobo88/Hydra) | Python/LangGraph supervisor orchestration | Peer + governed |
-| [**TheEights**](https://github.com/lebobo88/TheEights) | Memory fabric + evolution daemon (TypeScript) | Peer + governed |
-| [**pair-programmer**](https://github.com/lebobo88/pair-programmer) | Best-of-N coding harness with worktree isolation | Peer + governed |
-| [**ExecutiveSuite**](https://github.com/lebobo88/ExecutiveSuite) | Synthetic C-suite forums and executive personas | Governed |
-| [**MarketBliss**](https://github.com/lebobo88/MarketBliss) | Market intelligence and data pipelines | Governed |
-| [**RLM-Creative**](https://github.com/lebobo88/RLM-Creative) | Creative/render workflows and asset pipelines | Governed |
+| [**Hydra**](https://github.com/lebobo88/Hydra) | Python/LangGraph multi-squad supervisor; routes, governs, synthesizes | Peer + governed |
+| [**TheEights**](https://github.com/lebobo88/TheEights) | Shared memory / audit / identity / governance / self-evolution substrate; the root of trust | Peer + governed |
+| [**pair-programmer**](https://github.com/lebobo88/pair-programmer) | Best-of-N coding harness with worktree isolation; Hydra's "engineering" squad | Peer + governed |
+| [**ExecutiveSuite**](https://github.com/lebobo88/ExecutiveSuite) | Synthetic C-suite forums and executive personas; the "executive" squad | Governed |
+| [**MarketBliss**](https://github.com/lebobo88/MarketBliss) | Enterprise marketing platform; the five "marketing-*" squads | Governed |
+| [**RLM-Creative**](https://github.com/lebobo88/RLM-Creative) | Creative / media studio; the "garland" squad | Governed |
+| [**Senate**](https://github.com/lebobo88/Senate) | PhD-level legal wing, "the Curia": 12 jurists under the Twelve Tables; the "legal-compliance" squad. ACTIVE | Governed (mesh-enrolled) |
+| [**Xenia**](https://github.com/lebobo88/Xenia-Support) | Customer-support "Hearth": an 11-agent crew for triage, recommendation, VoC, and approval-gated execution; the "customer-support" squad. ACTIVE | Governed |
 
-Every write to `.claude/*` in any sibling project passes through Smith's Inspector first. No exceptions.
+And binding all of the above:
+
+| Layer | Role | Relationship |
+|-------|------|-------------|
+| [**AgentMesh**](https://github.com/lebobo88/AgentMesh) | The thin, governed **control plane** of the mesh — one registry, one lifecycle supervisor, one observability plane, one federated audit timeline, one external protocol edge, one operator console. Enrolls systems via `mesh-manifest.yaml` (fail-closed: JSON-Schema + TheEights constitution attestation + **AgentSmith structural inspection** must all pass). Routes and observes; enforces no governance of its own. | Control plane — **calls AgentSmith for enrollment inspection** |
+
+Every write to `.claude/*` in any sibling project passes through Smith's Inspector first, and every AgentMesh enrollment routes the candidate's `mesh-manifest.yaml` through Smith's structural inspection (`smith.manifest.inspect`) as the fail-closed inspection gate. No exceptions. Governance authority stays with TheEights -> AgentSmith -> Hydra (precedence order); AgentMesh routes and observes but does not arbitrate.
 
 ---
 
@@ -286,13 +294,18 @@ graph LR
     AS <-->|"evolution propose/commit<br/>constitution attest<br/>HITL routing"| E
     AS <-->|"best-of-N sandbox<br/>rubric evaluation<br/>Borda-count winner"| PP
 
-    subgraph governed["Governed Projects"]
-        ES["ExecutiveSuite"]
-        MB["MarketBliss"]
-        RC["RLM-Creative"]
+    subgraph governed["Governed Projects (Hydra squad source-packs)"]
+        ES["ExecutiveSuite<br/><i>executive squad</i>"]
+        MB["MarketBliss<br/><i>marketing-* squads</i>"]
+        RC["RLM-Creative<br/><i>garland squad</i>"]
+        SEN["Senate<br/><i>legal-compliance squad</i>"]
+        XEN["Xenia<br/><i>customer-support squad</i>"]
     end
 
     AS -->|"pre-tool hooks<br/>inspector gates<br/>quarantine buckets"| governed
+
+    AM["<b>AgentMesh</b><br/>governed control plane<br/>(registry / lifecycle /<br/>audit / protocol edge)"]
+    AM -->|"enrollment:<br/>smith.manifest.inspect<br/>(fail-closed gate)"| AS
 
     style AS fill:#1a1a2e,stroke:#00ff41,stroke-width:3px,color:#00ff41
     style peers fill:#0d0d1a,stroke:#4fc3f7,color:#4fc3f7
@@ -303,6 +316,9 @@ graph LR
     style ES fill:#0d0d1a,stroke:#ff8a65,color:#ff8a65
     style MB fill:#0d0d1a,stroke:#ff8a65,color:#ff8a65
     style RC fill:#0d0d1a,stroke:#ff8a65,color:#ff8a65
+    style SEN fill:#0d0d1a,stroke:#ff8a65,color:#ff8a65
+    style XEN fill:#0d0d1a,stroke:#ff8a65,color:#ff8a65
+    style AM fill:#0d0d1a,stroke:#b388ff,stroke-width:2px,color:#b388ff
 ```
 
 **How the peers interact with Smith:**
@@ -322,6 +338,8 @@ graph LR
 | [ExecutiveSuite](https://github.com/lebobo88/ExecutiveSuite) | Exec persona drift, board protocol invariants |
 | [MarketBliss](https://github.com/lebobo88/MarketBliss) | Data-source provenance, output reproducibility |
 | [RLM-Creative](https://github.com/lebobo88/RLM-Creative) | Render budget, asset-license invariants |
+| [Senate](https://github.com/lebobo88/Senate) | Jurist roster drift, Law-of-Citations integrity, Tribune's-Veto (HITL) gate, mesh-manifest enrollment inspection |
+| [Xenia](https://github.com/lebobo88/Xenia-Support) | Support-crew drift, WS-AUTH capability enforcement, approval-gated execution invariants |
 | [pair-programmer](https://github.com/lebobo88/pair-programmer) | Rubric integrity, judge eligibility gates |
 
 ---
