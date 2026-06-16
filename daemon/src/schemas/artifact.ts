@@ -28,6 +28,7 @@ export const KNOWN_CONSUMER_PROJECTS = [
   "executiveSuite",
   "marketBliss",
   "rlmCreative",
+  "rlmGaming",
   "pairProgrammer",
   "agentSmith",
 ] as const;

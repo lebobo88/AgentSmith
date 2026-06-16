@@ -24,6 +24,7 @@ const SIBLING_DIR_NAMES: Record<string, string> = {
   executiveSuite: "ExecutiveSuite",
   marketBliss: "MarketBliss",
   rlmCreative: "RLM-Creative",
+  rlmGaming: "RLM-Gaming",
   pairProgrammer: "pair-programmer",
 };
 

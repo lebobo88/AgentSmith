@@ -108,6 +108,40 @@ function degraded<T extends Record<string, unknown>>(extra: T, reason: string): 
   return { ...extra, degraded: true, reason };
 }
 
+/**
+ * Classification of a `constitutionAttest` outcome for N8 boot decisions.
+ *   - "attested"  — exact hash match; serve real tools.
+ *   - "terminal"  — a genuine N8 violation (hash mismatch, attest refused, bad
+ *                   shape, missing local hash) OR no valid receipt; fail closed,
+ *                   do NOT retry.
+ *   - "transport" — eights unreachable / still cold-starting; safe to retry and
+ *                   to lift a refusal in the background once it recovers.
+ */
+export type AttestClass = "attested" | "terminal" | "transport";
+
+/**
+ * Pure classifier over an attest receipt. The ONLY retryable reason is
+ * `eights-mcp-unavailable` (transport); every other degraded reason is a
+ * terminal fail-closed N8 outcome. Kept exported + side-effect-free so the boot
+ * gate's retry/defer policy is unit-testable.
+ */
+export function classifyAttestOutcome(
+  receipt: AttestReceipt | (DegradedMarker & AttestReceipt),
+): { cls: AttestClass; detail: string } {
+  if ("degraded" in receipt && receipt.degraded) {
+    const reason = (receipt as DegradedMarker).reason;
+    const cls: AttestClass = reason === "eights-mcp-unavailable" ? "transport" : "terminal";
+    return { cls, detail: `degraded: ${reason}` };
+  }
+  if (!receipt.receipt_id || receipt.receipt_id === "degraded" || !receipt.content_hash) {
+    return { cls: "terminal", detail: "attest returned no valid receipt" };
+  }
+  return {
+    cls: "attested",
+    detail: `receipt=${receipt.receipt_id} content_hash=${receipt.content_hash}`,
+  };
+}
+
 /** The known consumers whose constitutions/resources TheEights governs. */
 type EightsConsumer = "eights" | "pp" | "hydra" | "execsuite" | "rlm" | "agentsmith";
 
@@ -161,10 +195,18 @@ export class EightsBridge {
   constructor(opts: EightsBridgeOptions = {}) {
     const command = opts.command ?? "node";
     const args = opts.args ?? [defaultEightsEntry()];
+    // TheEights cold start (episodic.db open, audit-repair, seeding 6
+    // constitutions) can exceed the mcp-client 2s connect default, which made
+    // AgentSmith lose the boot-attest connect race and wedge into N8-refusal.
+    // Default to 10s here, overridable via AGENTSMITH_EIGHTS_CONNECT_TIMEOUT_MS.
+    const connectTimeoutMs = Number(
+      process.env["AGENTSMITH_EIGHTS_CONNECT_TIMEOUT_MS"] ?? 10000,
+    );
     const cfg: McpServerConfig = {
       name: "eights",
       command,
       args,
+      connectTimeoutMs,
       ...(opts.env ? { env: opts.env } : {}),
     };
     this.log =

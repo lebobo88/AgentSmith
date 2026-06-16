@@ -34,12 +34,15 @@ try {
     } catch { }
     if (-not $mcpOk) { $reasons += 'mcp:agentsmith not registered (directly or via hydra_gateway backends.json)' }
 
-    # Resolve repo root (AGENTSMITH_REPO -> $CLAUDE_PROJECT_DIR -> hook's own
-    # ancestor) and the shared base that holds the sibling projects
-    # (AGENTSMITH_CONSUMER_BASE -> AIAPP_BASE -> parent of repo root). No
-    # hardcoded machine-specific absolute paths.
+    # Resolve AgentSmith's OWN repo root. The constitution being checked is
+    # always AgentSmith's, and this hook always lives at
+    # <AgentSmithRepo>/.claude/hooks/. Resolve from AGENTSMITH_REPO or the hook's
+    # own ancestor — deliberately NOT $CLAUDE_PROJECT_DIR, which points at
+    # whichever project launched the session (e.g. an rlm-gaming squad pack) and
+    # would make the constitution check look in the wrong tree and falsely report
+    # "constitution missing". The shared sibling base resolves from
+    # AGENTSMITH_CONSUMER_BASE -> AIAPP_BASE -> parent of repo root.
     $repoRoot = $env:AGENTSMITH_REPO
-    if ([string]::IsNullOrWhiteSpace($repoRoot)) { $repoRoot = $env:CLAUDE_PROJECT_DIR }
     if ([string]::IsNullOrWhiteSpace($repoRoot)) {
         # hook lives at <repoRoot>/.claude/hooks/agentsmith-doctor.ps1
         $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -53,17 +56,18 @@ try {
     $constOk = Test-Path -LiteralPath $constitution
     if (-not $constOk) { $reasons += "constitution missing: $constitution" }
 
-    # (c) at least 3 of 5 sibling project roots reachable
+    # (c) at least 3 sibling project roots reachable
     $siblings = @(
         (Join-Path $base 'Hydra'),
         (Join-Path $base 'TheEights'),
         (Join-Path $base 'ExecutiveSuite'),
         (Join-Path $base 'MarketBliss'),
         (Join-Path $base 'RLM-Creative'),
+        (Join-Path $base 'RLM-Gaming'),
         (Join-Path $base 'pair-programmer')
     )
     $reachable = ($siblings | Where-Object { Test-Path -LiteralPath $_ }).Count
-    if ($reachable -lt 3) { $reasons += "only $reachable/6 sibling roots reachable" }
+    if ($reachable -lt 3) { $reasons += "only $reachable/7 sibling roots reachable" }
 
     if ($reasons.Count -eq 0) {
         Write-Output '[smith] online. Constitution sealed. Invariants enforced.'
