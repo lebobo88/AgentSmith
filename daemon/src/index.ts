@@ -136,88 +136,62 @@ async function main(): Promise<void> {
     }
   };
 
-  // Bounded boot retry: give a cold-starting eights a few seconds before
-  // committing to a refusal map. Retry ONLY transport outcomes.
+  // Serve the N8-refusal tool map IMMEDIATELY, attest in the BACKGROUND.
+  // Previously the boot ran up to AGENTSMITH_BOOT_ATTEST_ATTEMPTS (5) blocking
+  // attest attempts (×10s connect timeout + backoff ≈ 50s) BEFORE startMcpServer,
+  // so while eights was slow/busy (e.g. its write lock saturated by a watcher
+  // flood) the gateway's discovery got no answer and recorded AgentSmith as
+  // tool_count=0 / "not connected". buildN8RefusalTools exposes the full real
+  // tool NAME-set (every call refused), and mcp/server.ts reads the tools Map
+  // live per request — so we can answer initialize + tools/list at once and swap
+  // the real implementations into this same Map once attest succeeds. Fail-closed
+  // is preserved: every tool CALL is refused until N8 attestation passes.
   const bootAttempts = Math.max(1, Number(process.env["AGENTSMITH_BOOT_ATTEST_ATTEMPTS"] ?? 5));
-  let attestMode: "attested" | "n8-refusal" = "n8-refusal";
-  let attestDetail = "not attempted";
-  let transportDegraded = false;
-  for (let attempt = 1; attempt <= bootAttempts; attempt += 1) {
-    const { cls, detail } = await attestOnce();
-    attestDetail = detail;
-    if (cls === "attested") {
-      attestMode = "attested";
-      transportDegraded = false;
-      log.info({ constitution_sha256: hash, detail }, "N8: constitution attested — booting normally");
-      break;
-    }
-    if (cls === "terminal") {
-      transportDegraded = false;
-      log.warn({ local_sha256: hash, detail }, "N8: constitution attest terminal — booting in N8-refusal mode (fail-closed)");
-      break;
-    }
-    // transport — retry with linear backoff (1s, 2s, 3s, 4s, capped at 5s)
-    transportDegraded = true;
-    log.warn({ attempt, of: bootAttempts, local_sha256: hash, detail }, "N8: attest transport-degraded — retrying");
-    if (attempt < bootAttempts) await sleep(Math.min(attempt, 5) * 1000);
-  }
+  const tools = buildN8RefusalTools(kernel, "boot attest pending");
+  let stopAttest = false;
+  const stopAttestFn = (): void => { stopAttest = true; };
+  process.on("SIGINT", stopAttestFn);
+  process.on("SIGTERM", stopAttestFn);
 
-  const tools = attestMode === "attested"
-    ? registerTools(kernel)
-    : buildN8RefusalTools(kernel, attestDetail);
-  if (attestMode === "attested") {
-    log.info({ tool_count: tools.size, mode: "attested" }, "agentsmith MCP tools registered");
-  } else {
-    log.warn({ tool_count: tools.size, mode: "n8-refusal", detail: attestDetail }, "agentsmith booted in N8-refusal mode — all tool calls will be refused");
-  }
-
-  // Background re-attest: only when the boot ended on a transport race. The MCP
-  // server reads the live tools Map per request (mcp/server.ts), so replacing
-  // the refusal entries in place lifts the N8-refusal with no restart. A later
-  // terminal mismatch stops the loop and stays refused (fail-closed).
-  if (attestMode === "n8-refusal" && transportDegraded) {
-    let stopped = false;
-    const stopReattest = (): void => { stopped = true; };
-    process.on("SIGINT", stopReattest);
-    process.on("SIGTERM", stopReattest);
-    void (async () => {
-      let delay = 10000;
-      const maxDelay = 30000;
-      while (!stopped) {
-        await sleep(delay);
-        if (stopped) return;
-        const { cls, detail } = await attestOnce();
-        if (cls === "attested") {
-          const real = registerTools(kernel);
-          for (const [name, def] of real) tools.set(name, def);
-          log.info({ constitution_sha256: hash, detail, tool_count: tools.size }, "N8: constitution attested (deferred) — lifting refusal");
-          try {
-            decisions.seal({
-              actor: "smith-boot",
-              subject_kind: "constitution",
-              subject_id: hash,
-              verdict: {
-                outcome: "allow",
-                rationale: "N8 constitution attested (deferred) — refusal lifted after eights became reachable",
-                cited_invariants: ["N8"],
-                evidence: [{ key: "receipt", value: detail }],
-                decided_at: new Date().toISOString(),
-              },
-            });
-          } catch (sealErr) {
-            log.warn({ err: String(sealErr) }, "failed to seal deferred-attest decision");
-          }
-          return;
+  const runAttest = async (): Promise<void> => {
+    let attempt = 0;
+    while (!stopAttest) {
+      attempt += 1;
+      const { cls, detail } = await attestOnce();
+      if (cls === "attested") {
+        const real = registerTools(kernel);
+        for (const [name, def] of real) tools.set(name, def);
+        log.info({ constitution_sha256: hash, detail, tool_count: tools.size }, "N8: constitution attested — real tools active");
+        try {
+          decisions.seal({
+            actor: "smith-boot",
+            subject_kind: "constitution",
+            subject_id: hash,
+            verdict: {
+              outcome: "allow",
+              rationale: "N8 constitution attested — refusal lifted once eights was reachable",
+              cited_invariants: ["N8"],
+              evidence: [{ key: "receipt", value: detail }],
+              decided_at: new Date().toISOString(),
+            },
+          });
+        } catch (sealErr) {
+          log.warn({ err: String(sealErr) }, "failed to seal attest decision");
         }
-        if (cls === "terminal") {
-          log.warn({ detail }, "N8: deferred attest hit terminal mismatch — staying refused (fail-closed)");
-          return;
-        }
-        // still transport — keep trying with capped backoff
-        delay = Math.min(delay + 5000, maxDelay);
+        return;
       }
-    })();
-  }
+      if (cls === "terminal") {
+        log.warn({ local_sha256: hash, detail }, "N8: constitution attest terminal — staying in N8-refusal (fail-closed)");
+        return;
+      }
+      // transport race — retry forever. Fast (1–4s) for the first bootAttempts
+      // to catch a cold eights quickly, then capped backoff to 30s.
+      log.warn({ attempt, local_sha256: hash, detail }, "N8: attest transport-degraded — retrying in background");
+      const delay = attempt < bootAttempts ? Math.min(attempt, 5) * 1000 : Math.min(10000 + attempt * 1000, 30000);
+      await sleep(delay);
+    }
+  };
+  log.info({ tool_count: tools.size, mode: "n8-refusal" }, "agentsmith serving tools (N8-refusal) — attesting in background");
 
   // Wire tail watchers — best-effort. Each emitted event is classified;
   // a match publishes to the in-process watcher and seals a decision record.
@@ -259,6 +233,10 @@ async function main(): Promise<void> {
   // this guarantees AgentSmith reaches MCP-ready well within the gateway's
   // connect window regardless of how large the on-disk event logs are.
   await startMcpServer(tools, "0.1.0");
+
+  // Attest N8 in the background now that the transport answers discovery. On
+  // success the refusal entries are swapped for real tools in place (no restart).
+  void runAttest();
 
   // Tail watchers start after the transport is live. Each emitted event is
   // classified; a match publishes to the in-process watcher and seals a
