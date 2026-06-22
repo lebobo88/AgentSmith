@@ -76,7 +76,10 @@ export class McpClient {
     private readonly cfg: McpServerConfig,
     private readonly log: BridgeLogger = consoleLogger,
   ) {
-    this.connectTimeoutMs = cfg.connectTimeoutMs ?? 2000;
+    const defaultConnectTimeoutMs = cfg.name === "eights"
+      ? Number(process.env["AGENTSMITH_EIGHTS_CONNECT_TIMEOUT_MS"] ?? 20000)
+      : 2000;
+    this.connectTimeoutMs = cfg.connectTimeoutMs ?? defaultConnectTimeoutMs;
   }
 
   private async ensureConnected(): Promise<void> {

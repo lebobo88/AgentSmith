@@ -195,18 +195,10 @@ export class EightsBridge {
   constructor(opts: EightsBridgeOptions = {}) {
     const command = opts.command ?? "node";
     const args = opts.args ?? [defaultEightsEntry()];
-    // TheEights cold start (episodic.db open, audit-repair, seeding 6
-    // constitutions) can exceed the mcp-client 2s connect default, which made
-    // AgentSmith lose the boot-attest connect race and wedge into N8-refusal.
-    // Default to 10s here, overridable via AGENTSMITH_EIGHTS_CONNECT_TIMEOUT_MS.
-    const connectTimeoutMs = Number(
-      process.env["AGENTSMITH_EIGHTS_CONNECT_TIMEOUT_MS"] ?? 10000,
-    );
     const cfg: McpServerConfig = {
       name: "eights",
       command,
       args,
-      connectTimeoutMs,
       ...(opts.env ? { env: opts.env } : {}),
     };
     this.log =

@@ -7,6 +7,7 @@ import { EightsBridge, type SinkGateRefs } from "../src/bridges/eights-bridge.js
 import { buildN8RefusalTools, registerTools } from "../src/mcp/tools.js";
 import { checkSchema } from "../src/inspector/schema-checks.js";
 import type { SmithKernel } from "../src/mcp/tools.js";
+import { createN8AttestationController } from "../src/n8-attestation.js";
 
 /**
  * AS-GV governance tests — Reflexion-2 pass (sink-level enforcement).
@@ -460,15 +461,18 @@ describe("Issue 4 — buildN8RefusalTools: exact name-set equality (no regressio
   it("refusal map has EXACTLY the same tool names as the real tool map", () => {
     const kernel = makeKernel();
     const realTools = registerTools(kernel);
-    const refusalTools = buildN8RefusalTools(kernel, "test-detail");
+    const refusalTools = buildN8RefusalTools(kernel, () => "test-detail");
 
     expect(new Set(refusalTools.keys())).toEqual(new Set(realTools.keys()));
   });
 
   it("every refusal handler returns ok:false, refused:true, detail preserved", async () => {
     const kernel = makeKernel();
-    const refusalTools = buildN8RefusalTools(kernel, "mismatch-detail");
+    const refusalTools = buildN8RefusalTools(kernel, () => "mismatch-detail");
     for (const [name, tool] of refusalTools) {
+      if (name === "agentsmith.constitution.reattest") {
+        continue;
+      }
       const r = await tool.handler({}) as Record<string, unknown>;
       expect(r["ok"], name).toBe(false);
       expect(r["refused"], name).toBe(true);
@@ -479,9 +483,75 @@ describe("Issue 4 — buildN8RefusalTools: exact name-set equality (no regressio
 
   it("refusal map schema rejects invalid input (real schema kept, not z.record fallback)", () => {
     const kernel = makeKernel();
-    const refusalTools = buildN8RefusalTools(kernel, "x");
+    const refusalTools = buildN8RefusalTools(kernel, () => "x");
     const scaffold = refusalTools.get("agentsmith.factory.scaffold")!;
     expect(scaffold.inputSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("reattest remains callable in the refusal map and swaps real tools in place on success", async () => {
+    const kernel = makeKernel({
+      factory: { scaffold: vi.fn().mockResolvedValue({ ok: true }) } as any,
+    });
+    const tools = new Map();
+    const attestation = createN8AttestationController({
+      hash: "a".repeat(64),
+      bootAttempts: 1,
+      attestOnce: vi.fn().mockResolvedValue({ cls: "attested", detail: "receipt=sig-ok" }),
+      activateRealTools: async () => {
+        const real = registerTools(kernel);
+        for (const [name, def] of real) tools.set(name, def);
+      },
+      log: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+    });
+    kernel.attestation = attestation;
+    for (const [name, def] of buildN8RefusalTools(kernel, attestation.getDetail)) {
+      tools.set(name, def);
+    }
+
+    const before = await tools.get("agentsmith.factory.scaffold")!.handler({});
+    expect((before as Record<string, unknown>).refused).toBe(true);
+
+    const reattest = await tools.get("agentsmith.constitution.reattest")!.handler({});
+    expect((reattest as Record<string, unknown>).ok).toBe(true);
+
+    await tools.get("agentsmith.factory.scaffold")!.handler({
+      kind: "agent",
+      slug: "smith-test",
+      project: "hydra",
+    });
+    expect(kernel.factory.scaffold).toHaveBeenCalledTimes(1);
+  });
+
+  it("reattest returns a terminal refusal on mismatch and keeps the refusal map active", async () => {
+    const kernel = makeKernel();
+    const tools = new Map();
+    const attestation = createN8AttestationController({
+      hash: "a".repeat(64),
+      bootAttempts: 1,
+      attestOnce: vi.fn().mockResolvedValue({ cls: "terminal", detail: "degraded: eights-attest-hash-mismatch" }),
+      activateRealTools: vi.fn(),
+      log: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+    });
+    kernel.attestation = attestation;
+    for (const [name, def] of buildN8RefusalTools(kernel, attestation.getDetail)) {
+      tools.set(name, def);
+    }
+
+    const result = await tools.get("agentsmith.constitution.reattest")!.handler({});
+    expect(result).toMatchObject({
+      ok: false,
+      refused: true,
+      degraded: false,
+      status: "terminal",
+    });
+    expect((result as Record<string, unknown>).detail).toBe(
+      "boot attest fail-closed: degraded: eights-attest-hash-mismatch",
+    );
+
+    const after = await tools.get("agentsmith.factory.scaffold")!.handler({});
+    expect((after as Record<string, unknown>).detail).toBe(
+      "boot attest fail-closed: degraded: eights-attest-hash-mismatch",
+    );
   });
 });
 

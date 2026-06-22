@@ -11,6 +11,7 @@ import { DecisionStore, buildAudit } from "../archivist/index.js";
 import { EightsBridge, HydraBridge, PpBridge, ConsumerBridge } from "../bridges/index.js";
 import { ArtifactKindSchema, ConsumerProjectSchema } from "../schemas/artifact.js";
 import type { SmithVerdict } from "../schemas/verdict.js";
+import type { N8AttestationController } from "../n8-attestation.js";
 
 /**
  * AS-GV-2: Venom guard — shared N2 enforcement helper.
@@ -70,6 +71,7 @@ export interface SmithKernel {
   hydra: HydraBridge;
   pp: PpBridge;
   consumer: ConsumerBridge;
+  attestation?: N8AttestationController;
 }
 
 export function registerTools(kernel: SmithKernel): ToolMap {
@@ -147,6 +149,23 @@ export function registerTools(kernel: SmithKernel): ToolMap {
           reason: "constitution_amendment",
           payload: { text: a.text, rationale: a.rationale },
         });
+      },
+    },
+    {
+      name: "agentsmith.constitution.reattest",
+      description:
+        "Re-run full TheEights constitution attestation in-process and lift N8 refusal if the hash verifies.",
+      inputSchema: z.object({}),
+      handler: async () => {
+        if (!kernel.attestation) {
+          return {
+            ok: false,
+            refused: true,
+            reason: "N8: reattestation controller unavailable",
+            detail: "boot attest controller missing",
+          };
+        }
+        return kernel.attestation.reattest();
       },
     },
     {
@@ -499,10 +518,14 @@ export function registerTools(kernel: SmithKernel): ToolMap {
  * so the gateway doesn't time out, but every tool call returns the N8 refusal
  * envelope.
  */
-export function buildN8RefusalTools(kernel: SmithKernel, attestDetail: string): ToolMap {
+export function buildN8RefusalTools(kernel: SmithKernel, getAttestDetail: () => string): ToolMap {
   const realTools = registerTools(kernel);
   const refusalMap: ToolMap = new Map();
   for (const [name, real] of realTools) {
+    if (name === "agentsmith.constitution.reattest") {
+      refusalMap.set(name, real);
+      continue;
+    }
     refusalMap.set(name, {
       name,
       description: `[N8-REFUSAL] ${name} is unavailable: constitution unattested.`,
@@ -512,7 +535,7 @@ export function buildN8RefusalTools(kernel: SmithKernel, attestDetail: string): 
         ok: false,
         refused: true,
         reason: "N8: constitution unattested/mismatch — tools refused",
-        detail: attestDetail,
+        detail: getAttestDetail(),
       }),
     });
   }

@@ -30,8 +30,9 @@ import { Isolator } from "./quarantine/index.js";
 import { Registry } from "./keymaker/index.js";
 import { DecisionStore } from "./archivist/index.js";
 import { EightsBridge, HydraBridge, PpBridge, ConsumerBridge, classifyAttestOutcome, type SinkGateRefs, type AttestClass } from "./bridges/index.js";
-import { startMcpServer } from "./mcp/server.js";
+import { startMcpServer, type ToolMap } from "./mcp/server.js";
 import { registerTools, buildN8RefusalTools, type SmithKernel } from "./mcp/tools.js";
+import { createN8AttestationController, createN8EscalationEvent, startSupervisedAttestLoop } from "./n8-attestation.js";
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -121,8 +122,6 @@ async function main(): Promise<void> {
   // Fail-closed is preserved: only transport races are retried/deferred. A real
   // hash mismatch or attest refusal is never lifted in the background.
   // Crash (process.exitCode=1, no serve) only on constitutionHash() throw above.
-  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
   const attestOnce = async (): Promise<{ cls: AttestClass; detail: string }> => {
     try {
       // The bridge sources the local hash internally and attests against
@@ -147,50 +146,87 @@ async function main(): Promise<void> {
   // the real implementations into this same Map once attest succeeds. Fail-closed
   // is preserved: every tool CALL is refused until N8 attestation passes.
   const bootAttempts = Math.max(1, Number(process.env["AGENTSMITH_BOOT_ATTEST_ATTEMPTS"] ?? 5));
-  const tools = buildN8RefusalTools(kernel, "boot attest pending");
+  const transportEscalateFailures = Math.max(1, Number(process.env["AGENTSMITH_BOOT_ATTEST_ESCALATE_FAILURES"] ?? 5));
+  const transportEscalateWindowMinutes = Math.max(1, Number(process.env["AGENTSMITH_BOOT_ATTEST_ESCALATE_WINDOW_MINUTES"] ?? 10));
   let stopAttest = false;
   const stopAttestFn = (): void => { stopAttest = true; };
   process.on("SIGINT", stopAttestFn);
   process.on("SIGTERM", stopAttestFn);
-
-  const runAttest = async (): Promise<void> => {
-    let attempt = 0;
-    while (!stopAttest) {
-      attempt += 1;
-      const { cls, detail } = await attestOnce();
-      if (cls === "attested") {
-        const real = registerTools(kernel);
-        for (const [name, def] of real) tools.set(name, def);
-        log.info({ constitution_sha256: hash, detail, tool_count: tools.size }, "N8: constitution attested — real tools active");
+  const tools: ToolMap = new Map();
+  const activateRealTools = async (detail: string): Promise<void> => {
+    const real = registerTools(kernel);
+    for (const [name, def] of real) tools.set(name, def);
+    try {
+      decisions.seal({
+        actor: "smith-boot",
+        subject_kind: "constitution",
+        subject_id: hash,
+        verdict: {
+          outcome: "allow",
+          rationale: "N8 constitution attested — refusal lifted once eights was reachable",
+          cited_invariants: ["N8"],
+          evidence: [{ key: "receipt", value: detail }],
+          decided_at: new Date().toISOString(),
+        },
+      });
+    } catch (sealErr) {
+      log.warn({ err: String(sealErr) }, "failed to seal attest decision");
+    }
+  };
+  const attestation = createN8AttestationController({
+    hash,
+    bootAttempts,
+    attestOnce,
+    activateRealTools,
+    log: bridgeLogger,
+    stopRequested: () => stopAttest,
+    escalation: {
+      failureThreshold: transportEscalateFailures,
+      windowMs: transportEscalateWindowMinutes * 60_000,
+      emit: async (snapshot) => {
+        const summary = `N8 boot attestation transport degraded after ${snapshot.attempt} attempts; detail=${snapshot.lastError ?? snapshot.detail}`;
+        const event = createN8EscalationEvent(summary);
+        await watcher.publish(event);
         try {
           decisions.seal({
-            actor: "smith-boot",
+            actor: "smith-sentinel",
             subject_kind: "constitution",
             subject_id: hash,
             verdict: {
-              outcome: "allow",
-              rationale: "N8 constitution attested — refusal lifted once eights was reachable",
+              outcome: "escalate",
+              rationale: "N8 boot attestation transport degraded",
               cited_invariants: ["N8"],
-              evidence: [{ key: "receipt", value: detail }],
+              evidence: [
+                { key: "attempt", value: String(snapshot.attempt) },
+                { key: "detail", value: snapshot.lastError ?? snapshot.detail },
+              ],
               decided_at: new Date().toISOString(),
             },
           });
         } catch (sealErr) {
-          log.warn({ err: String(sealErr) }, "failed to seal attest decision");
+          log.warn({ err: String(sealErr) }, "failed to seal N8 transport escalation");
         }
-        return;
-      }
-      if (cls === "terminal") {
-        log.warn({ local_sha256: hash, detail }, "N8: constitution attest terminal — staying in N8-refusal (fail-closed)");
-        return;
-      }
-      // transport race — retry forever. Fast (1–4s) for the first bootAttempts
-      // to catch a cold eights quickly, then capped backoff to 30s.
-      log.warn({ attempt, local_sha256: hash, detail }, "N8: attest transport-degraded — retrying in background");
-      const delay = attempt < bootAttempts ? Math.min(attempt, 5) * 1000 : Math.min(10000 + attempt * 1000, 30000);
-      await sleep(delay);
-    }
-  };
+        const hitl = await eights.governanceHitlRequest({
+          reason: "n8_boot_attest_transport_degraded",
+          payload: {
+            constitution_sha256: hash,
+            attempt: snapshot.attempt,
+            detail: snapshot.lastError ?? snapshot.detail,
+            escalated_at: snapshot.escalated_at,
+          },
+        });
+        if ("degraded" in hitl && hitl.degraded) {
+          log.warn({ constitution_sha256: hash, reason: hitl.reason }, "N8: transport escalation HITL degraded");
+          return;
+        }
+        log.warn({ constitution_sha256: hash, request_id: hitl.request_id }, "N8: transport escalation HITL opened");
+      },
+    },
+  });
+  kernel.attestation = attestation;
+  for (const [name, def] of buildN8RefusalTools(kernel, attestation.getDetail)) {
+    tools.set(name, def);
+  }
   log.info({ tool_count: tools.size, mode: "n8-refusal" }, "agentsmith serving tools (N8-refusal) — attesting in background");
 
   // Wire tail watchers — best-effort. Each emitted event is classified;
@@ -236,7 +272,10 @@ async function main(): Promise<void> {
 
   // Attest N8 in the background now that the transport answers discovery. On
   // success the refusal entries are swapped for real tools in place (no restart).
-  void runAttest();
+  startSupervisedAttestLoop(attestation.runLoop, {
+    log: bridgeLogger,
+    stopRequested: () => stopAttest,
+  });
 
   // Tail watchers start after the transport is live. Each emitted event is
   // classified; a match publishes to the in-process watcher and seals a
