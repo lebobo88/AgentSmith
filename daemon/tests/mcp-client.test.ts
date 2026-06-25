@@ -1,0 +1,111 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  claimSingletonLease,
+  reapSingletonLease,
+  releaseSingletonLease,
+  singletonLeasePath,
+} from "../src/bridges/mcp-client.js";
+
+describe("McpClient singleton lease reaping", () => {
+  const singletonKey = "eights-stdio-daemon";
+  const expected = {
+    command: "node",
+    args: ["C:/AiAppDeployments/TheEights/daemon/dist/index.js"],
+  };
+
+  let scratch = "";
+  let priorDir: string | undefined;
+
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), "agentsmith-singleton-"));
+    priorDir = process.env["AGENTSMITH_BRIDGE_SINGLETON_DIR"];
+    process.env["AGENTSMITH_BRIDGE_SINGLETON_DIR"] = scratch;
+  });
+
+  afterEach(() => {
+    if (priorDir === undefined) {
+      delete process.env["AGENTSMITH_BRIDGE_SINGLETON_DIR"];
+    } else {
+      process.env["AGENTSMITH_BRIDGE_SINGLETON_DIR"] = priorDir;
+    }
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it("reaps a matching stale child and clears the lease", () => {
+    const killProcessTree = vi.fn().mockReturnValue(true);
+    claimSingletonLease(singletonKey, {
+      pid: 4242,
+      command: expected.command,
+      args: expected.args,
+      claimed_at: new Date().toISOString(),
+    });
+
+    const result = reapSingletonLease(
+      singletonKey,
+      expected,
+      { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+      {
+        isProcessAlive: vi.fn().mockReturnValue(true),
+        getProcessCommandLine: vi.fn().mockReturnValue(
+          `node ${expected.args[0]} --stdio`,
+        ),
+        killProcessTree,
+      },
+    );
+
+    expect(result).toEqual({
+      action: "reaped",
+      reason: "stale-child-reaped",
+      pid: 4242,
+    });
+    expect(killProcessTree).toHaveBeenCalledWith(4242);
+    expect(existsSync(singletonLeasePath(singletonKey))).toBe(false);
+  });
+
+  it("clears the lease without killing when the recorded pid now belongs to another process", () => {
+    const killProcessTree = vi.fn().mockReturnValue(true);
+    claimSingletonLease(singletonKey, {
+      pid: 5151,
+      command: expected.command,
+      args: expected.args,
+      claimed_at: new Date().toISOString(),
+    });
+
+    const result = reapSingletonLease(
+      singletonKey,
+      expected,
+      { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+      {
+        isProcessAlive: vi.fn().mockReturnValue(true),
+        getProcessCommandLine: vi.fn().mockReturnValue("powershell.exe -NoProfile"),
+        killProcessTree,
+      },
+    );
+
+    expect(result).toEqual({
+      action: "cleared",
+      reason: "pid-command-mismatch",
+      pid: 5151,
+    });
+    expect(killProcessTree).not.toHaveBeenCalled();
+    expect(existsSync(singletonLeasePath(singletonKey))).toBe(false);
+  });
+
+  it("only releases the lease when the pid matches the current child", () => {
+    claimSingletonLease(singletonKey, {
+      pid: 6262,
+      command: expected.command,
+      args: expected.args,
+      claimed_at: new Date().toISOString(),
+    });
+
+    releaseSingletonLease(singletonKey, 9999);
+    expect(existsSync(singletonLeasePath(singletonKey))).toBe(true);
+
+    releaseSingletonLease(singletonKey, 6262);
+    expect(existsSync(singletonLeasePath(singletonKey))).toBe(false);
+  });
+});

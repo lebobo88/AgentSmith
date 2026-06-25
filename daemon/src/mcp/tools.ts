@@ -123,15 +123,15 @@ export function registerTools(kernel: SmithKernel): ToolMap {
     {
       name: "agentsmith.constitution.attest",
       description:
-        "Emit an attestation receipt binding a workflow to a consumer's constitution hash (default consumer: hydra). Refuses if that consumer has no registered constitution.",
+        "Emit an attestation receipt binding a workflow to AgentSmith's own constitution hash. Refuses if a non-agentsmith consumer is requested.",
       inputSchema: z.object({
         workflow_id: z.string(),
-        consumer: z.enum(["eights", "pp", "hydra", "execsuite", "rlm"]).optional(),
+        consumer: z.literal("agentsmith").optional(),
       }),
       handler: async (args) => {
         const a = args as {
           workflow_id: string;
-          consumer?: "eights" | "pp" | "hydra" | "execsuite" | "rlm";
+          consumer?: "agentsmith";
         };
         // Hash is sourced internally by the bridge from the injected gate.constitutionHash().
         // The caller must not (and cannot) supply a localHash — the bridge parameter

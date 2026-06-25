@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import {
   SmithInvariantSchema,
@@ -69,11 +70,33 @@ function pickParagraph(body: string, re: RegExp): string {
   return m && m[1] ? m[1].trim() : "";
 }
 
-let cached: SmithConstitutionSnapshot | null = null;
+interface CachedConstitutionEntry {
+  snapshot: SmithConstitutionSnapshot;
+  mtimeMs: number;
+  size: number;
+}
+
+const cached = new Map<string, CachedConstitutionEntry>();
 
 export function getConstitution(path: string, refresh = false): SmithConstitutionSnapshot {
-  if (!cached || refresh) {
-    cached = loadConstitution(path);
+  const resolvedPath = resolve(path);
+  const current = statSync(resolvedPath);
+  const prior = cached.get(resolvedPath);
+  if (
+    !refresh &&
+    prior &&
+    prior.mtimeMs === current.mtimeMs &&
+    prior.size === current.size
+  ) {
+    return prior.snapshot;
   }
-  return cached;
+
+  const snapshot = loadConstitution(resolvedPath);
+  const next = statSync(resolvedPath);
+  cached.set(resolvedPath, {
+    snapshot,
+    mtimeMs: next.mtimeMs,
+    size: next.size,
+  });
+  return snapshot;
 }

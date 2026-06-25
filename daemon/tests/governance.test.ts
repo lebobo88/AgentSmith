@@ -399,6 +399,22 @@ describe("Issue 3 — constitutionAttest: mandatory comparison + TOCTOU", () => 
     expect((result as { reason: string }).reason).toBe("eights-attest-hash-mismatch");
   });
 
+  it("attest with non-agentsmith consumer → degraded('eights-attest-invalid-consumer') and no bridge call", async () => {
+    const LOCAL_HEX = "b".repeat(64);
+    const gate = makePassingGate({
+      constitutionHash: vi.fn().mockReturnValue(LOCAL_HEX),
+      bootAttestedHash: LOCAL_HEX,
+    });
+    const bridge = makeGatedBridge(gate);
+    const callMock = vi.fn();
+    (bridge as unknown as EightsInternals).client.call = callMock;
+
+    const result = await bridge.constitutionAttest("trace-1", "hydra");
+    expect("degraded" in result && result.degraded).toBe(true);
+    expect((result as { reason: string }).reason).toBe("eights-attest-invalid-consumer");
+    expect(callMock).not.toHaveBeenCalled();
+  });
+
   it("TOCTOU: constitutionHash() drifted since boot → sink gate blocks evolutionPropose", async () => {
     const BOOT_HASH = "a".repeat(64);
     const DRIFTED_HASH = "d".repeat(64);  // different from boot
@@ -451,6 +467,14 @@ describe("Issue 3 — constitutionAttest: mandatory comparison + TOCTOU", () => 
     // Confirm constitutionHash was NOT called on the inspector at the tools layer
     // (hash responsibility has moved entirely into the bridge's gate).
     expect(kernel.inspector.constitutionHash).not.toHaveBeenCalled();
+  });
+
+  it("public agentsmith.constitution.attest schema refuses non-agentsmith consumer values", () => {
+    const kernel = makeKernel();
+    const tools = registerTools(kernel);
+    const attestTool = tools.get("agentsmith.constitution.attest")!;
+    expect(attestTool.inputSchema.safeParse({ workflow_id: "wf-1", consumer: "hydra" }).success).toBe(false);
+    expect(attestTool.inputSchema.safeParse({ workflow_id: "wf-1", consumer: "agentsmith" }).success).toBe(true);
   });
 });
 

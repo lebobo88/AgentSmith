@@ -199,6 +199,7 @@ export class EightsBridge {
       name: "eights",
       command,
       args,
+      singletonKey: "eights-stdio-daemon",
       ...(opts.env ? { env: opts.env } : {}),
     };
     this.log =
@@ -645,6 +646,21 @@ export class EightsBridge {
     traceId: string,
     consumer: EightsConsumer = DEFAULT_ATTEST_CONSUMER,
   ): Promise<AttestReceipt | (DegradedMarker & AttestReceipt)> {
+    if (consumer !== DEFAULT_ATTEST_CONSUMER) {
+      this.log.warn(
+        {
+          tool: "eights.constitution.attest",
+          requested_consumer: consumer,
+          enforced_consumer: DEFAULT_ATTEST_CONSUMER,
+        },
+        "attest: refusing non-agentsmith consumer for Smith self-attestation",
+      );
+      return degraded(
+        { receipt_id: "degraded", hash: "0".repeat(64), consumer },
+        "eights-attest-invalid-consumer",
+      );
+    }
+
     // Hash is ALWAYS sourced internally — no external override permitted.
     let resolvedLocalHash: string | undefined;
     try {
