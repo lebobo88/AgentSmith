@@ -17,15 +17,19 @@ try {
     try {
         $claudeCfg = Join-Path $env:USERPROFILE '.claude.json'
         if (Test-Path -LiteralPath $claudeCfg) {
-            $cfg = Get-Content -LiteralPath $claudeCfg -Raw | ConvertFrom-Json
-            $servers = @($cfg.mcpServers.PSObject.Properties.Name)
+            # -AsHashTable: Claude Code's own clientDataCacheSlots can contain
+            # empty-string property names, which the default (PSCustomObject)
+            # ConvertFrom-Json rejects — it throws here, the catch swallows it,
+            # and agentsmith is then falsely reported unregistered every session.
+            $cfg = Get-Content -LiteralPath $claudeCfg -Raw | ConvertFrom-Json -AsHashTable
+            $servers = @($cfg['mcpServers'].Keys)
             if ($servers -contains 'agentsmith') {
                 $mcpOk = $true
             } elseif ($servers -contains 'hydra_gateway') {
                 $backendsFile = Join-Path $env:USERPROFILE '.hydra\backends.json'
                 if (Test-Path -LiteralPath $backendsFile) {
-                    $backends = Get-Content -LiteralPath $backendsFile -Raw | ConvertFrom-Json
-                    if (@($backends.PSObject.Properties.Name) -contains 'agentsmith') {
+                    $backends = Get-Content -LiteralPath $backendsFile -Raw | ConvertFrom-Json -AsHashTable
+                    if (@($backends.Keys) -contains 'agentsmith') {
                         $mcpOk = $true
                     }
                 }
