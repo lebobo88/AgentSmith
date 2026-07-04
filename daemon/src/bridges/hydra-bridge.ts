@@ -1,16 +1,38 @@
 /**
  * HydraBridge — MCP client to Hydra.
  *
- * Hydra's MCP servers are Python (`python -m mcp_servers.<server>`). The closest
- * thing to a "central" server is `executive_suite`; per-domain Venom / squad /
- * envelope tools may not exist yet, so every method here degrades politely on
- * a missing tool or transport error.
+ * Hydra's MCP servers are Python (`python -m mcp_servers.<server>`). The
+ * `hydra_control` server (Phase 3a, commit 67f3bfb on Hydra) registers the
+ * four tools this bridge calls:
+ *   - hydra.venom.cross_check
+ *   - hydra.squad.list
+ *   - hydra.envelope.record
+ *   - hydra.telemetry.tail
  *
- * Default command: `python -m mcp_servers.executive_suite` with cwd=<Hydra root>.
+ * Default spawn target: `python -m mcp_servers.hydra_control` with
+ * cwd=<Hydra root>.  Override the module via the
+ * `AGENTSMITH_HYDRA_BRIDGE_MODULE` env var (e.g. for testing or if Hydra
+ * reorganises its server layout in a future release).
+ *
+ * Every method degrades politely on a missing tool or transport error.
  */
 import { existsSync } from "node:fs";
 import { consumerRoots } from "../config.js";
 import { McpClient, type BridgeLogger, type McpServerConfig } from "./mcp-client.js";
+
+/**
+ * Resolve the Python module name to spawn.
+ *
+ * Resolution order (mirrors the AGENTSMITH_* env-var convention used by all
+ * other bridges and config.ts):
+ *   1. `AGENTSMITH_HYDRA_BRIDGE_MODULE` env (tier-1 explicit override).
+ *   2. Hardcoded default: `mcp_servers.hydra_control`.
+ */
+function resolveHydraModule(): string {
+  const fromEnv = process.env["AGENTSMITH_HYDRA_BRIDGE_MODULE"];
+  if (fromEnv && fromEnv.trim().length > 0) return fromEnv.trim();
+  return "mcp_servers.hydra_control";
+}
 
 /** Hydra repo root, derived from consumerRoots (AIAPP_BASE/anchor based). */
 function defaultHydraRoot(): string {
@@ -44,7 +66,7 @@ export class HydraBridge {
     const cfg: McpServerConfig = {
       name: "hydra",
       command: opts.command ?? "python",
-      args: opts.args ?? ["-m", "mcp_servers.executive_suite"],
+      args: opts.args ?? ["-m", resolveHydraModule()],
       cwd,
       ...(opts.env ? { env: opts.env } : {}),
     };
