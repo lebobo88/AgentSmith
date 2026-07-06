@@ -262,9 +262,14 @@ export class McpClient {
     private readonly cfg: McpServerConfig,
     private readonly log: BridgeLogger = consoleLogger,
   ) {
-    const defaultConnectTimeoutMs = cfg.name === "eights"
-      ? Number(process.env["AGENTSMITH_EIGHTS_CONNECT_TIMEOUT_MS"] ?? 20000)
-      : 2000;
+    let defaultConnectTimeoutMs: number;
+    if (cfg.name === "eights") {
+      defaultConnectTimeoutMs = Number(process.env["AGENTSMITH_EIGHTS_CONNECT_TIMEOUT_MS"] ?? 20000);
+    } else if (cfg.name === "hydra") {
+      defaultConnectTimeoutMs = Number(process.env["AGENTSMITH_HYDRA_CONNECT_TIMEOUT_MS"] ?? 15000);
+    } else {
+      defaultConnectTimeoutMs = 2000;
+    }
     this.connectTimeoutMs = cfg.connectTimeoutMs ?? defaultConnectTimeoutMs;
   }
 
