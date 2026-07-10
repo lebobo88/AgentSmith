@@ -126,8 +126,8 @@ describe("McpClient singleton lease reaping", () => {
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  it("reaps a matching stale child and clears the lease", () => {
-    const killProcessTree = vi.fn().mockReturnValue(true);
+  it("reaps a matching stale child and clears the lease", async () => {
+    const killProcessTree = vi.fn().mockResolvedValue(true);
     claimSingletonLease(singletonKey, {
       pid: 4242,
       command: expected.command,
@@ -135,13 +135,13 @@ describe("McpClient singleton lease reaping", () => {
       claimed_at: new Date().toISOString(),
     });
 
-    const result = reapSingletonLease(
+    const result = await reapSingletonLease(
       singletonKey,
       expected,
       { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
       {
         isProcessAlive: vi.fn().mockReturnValue(true),
-        getProcessCommandLine: vi.fn().mockReturnValue(
+        getProcessCommandLine: vi.fn().mockResolvedValue(
           `node ${expected.args[0]} --stdio`,
         ),
         killProcessTree,
@@ -157,8 +157,8 @@ describe("McpClient singleton lease reaping", () => {
     expect(existsSync(singletonLeasePath(singletonKey))).toBe(false);
   });
 
-  it("clears the lease without killing when the recorded pid now belongs to another process", () => {
-    const killProcessTree = vi.fn().mockReturnValue(true);
+  it("clears the lease without killing when the recorded pid now belongs to another process", async () => {
+    const killProcessTree = vi.fn().mockResolvedValue(true);
     claimSingletonLease(singletonKey, {
       pid: 5151,
       command: expected.command,
@@ -166,13 +166,13 @@ describe("McpClient singleton lease reaping", () => {
       claimed_at: new Date().toISOString(),
     });
 
-    const result = reapSingletonLease(
+    const result = await reapSingletonLease(
       singletonKey,
       expected,
       { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
       {
         isProcessAlive: vi.fn().mockReturnValue(true),
-        getProcessCommandLine: vi.fn().mockReturnValue("powershell.exe -NoProfile"),
+        getProcessCommandLine: vi.fn().mockResolvedValue("powershell.exe -NoProfile"),
         killProcessTree,
       },
     );
