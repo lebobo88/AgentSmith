@@ -270,38 +270,53 @@ async function main(): Promise<void> {
   // connect window regardless of how large the on-disk event logs are.
   await startMcpServer(tools, "0.1.0");
 
-  // Attest N8 in the background now that the transport answers discovery. On
-  // success the refusal entries are swapped for real tools in place (no restart).
-  startSupervisedAttestLoop(attestation.runLoop, {
-    log: bridgeLogger,
-    stopRequested: () => stopAttest,
+  // Yield one event-loop turn so the transport actually FLUSHES the queued
+  // `initialize` response before any boot-time warm-up runs. `startMcpServer`
+  // resolves as soon as the stdio transport is wired, but the response write is
+  // an I/O task that only drains once the current synchronous run completes;
+  // without this yield, the attest-loop + tail startup below execute in the same
+  // tick and can stall the loop, delaying the handshake by seconds (violating
+  // the "answer initialize immediately" guarantee above).
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  // Attest + tail startup are deferred to a LATER loop turn (setImmediate) so
+  // none of it can run between startMcpServer and the transport becoming
+  // responsive. Behavior and ordering are unchanged (attest loop, then hydra
+  // tail, then eights tail) — only WHEN they start is deferred by one tick.
+  setImmediate(() => {
+    // Attest N8 in the background now that the transport answers discovery. On
+    // success the refusal entries are swapped for real tools in place (no restart).
+    startSupervisedAttestLoop(attestation.runLoop, {
+      log: bridgeLogger,
+      stopRequested: () => stopAttest,
+    });
+
+    // Tail watchers. Each emitted event is classified; a match publishes to the
+    // in-process watcher and seals a decision record. seekToEnd (in
+    // eights-tail/hydra-tail) ensures pre-existing history is not re-read
+    // synchronously.
+    try {
+      const hydraTail = startHydraTail(handleTailEvent, {
+        onError: (err) => log.warn({ err: String(err) }, "hydra-tail error"),
+      });
+      log.info("hydra telemetry tail started");
+      process.on("SIGINT", () => hydraTail.stop());
+      process.on("SIGTERM", () => hydraTail.stop());
+    } catch (err) {
+      log.warn({ err: String(err) }, "hydra-tail failed to start");
+    }
+
+    try {
+      const eightsTail = startEightsTail(handleTailEvent, {
+        onError: (err) => log.warn({ err: String(err) }, "eights-tail error"),
+      });
+      log.info("eights observability tail started");
+      process.on("SIGINT", () => eightsTail.stop());
+      process.on("SIGTERM", () => eightsTail.stop());
+    } catch (err) {
+      log.warn({ err: String(err) }, "eights-tail failed to start");
+    }
   });
-
-  // Tail watchers start after the transport is live. Each emitted event is
-  // classified; a match publishes to the in-process watcher and seals a
-  // decision record. seekToEnd (in eights-tail/hydra-tail) ensures pre-existing
-  // history is not re-read synchronously.
-  try {
-    const hydraTail = startHydraTail(handleTailEvent, {
-      onError: (err) => log.warn({ err: String(err) }, "hydra-tail error"),
-    });
-    log.info("hydra telemetry tail started");
-    process.on("SIGINT", () => hydraTail.stop());
-    process.on("SIGTERM", () => hydraTail.stop());
-  } catch (err) {
-    log.warn({ err: String(err) }, "hydra-tail failed to start");
-  }
-
-  try {
-    const eightsTail = startEightsTail(handleTailEvent, {
-      onError: (err) => log.warn({ err: String(err) }, "eights-tail error"),
-    });
-    log.info("eights observability tail started");
-    process.on("SIGINT", () => eightsTail.stop());
-    process.on("SIGTERM", () => eightsTail.stop());
-  } catch (err) {
-    log.warn({ err: String(err) }, "eights-tail failed to start");
-  }
 }
 
 main().catch((err) => {
