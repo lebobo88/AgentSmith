@@ -117,11 +117,11 @@ stages:
   - kind: discover
     gate_type: spec
     generator: { agent: spec-author, primary: claude }
-    judge:     { tier: cross_vendor, rubric: marketing-brief-clarity@1, model_pref: gemini }
+    judge:     { tier: cross_vendor, rubric: marketing-brief-clarity@1, model_pref: agy }
   - kind: strategy
     gate_type: design
     generator: { agent: campaign-strategist, primary: claude }
-    judge:     { tier: cross_vendor, rubric: creative-brief-completeness@1, model_pref: gemini }
+    judge:     { tier: cross_vendor, rubric: creative-brief-completeness@1, model_pref: agy }
   - kind: governance
     gate_type: contract
     generator: { agent: brand-safety-compliance, primary: claude }
