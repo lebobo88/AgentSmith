@@ -148,7 +148,7 @@ stages:
   - kind: spec
     gate_type: spec
     generator: { agent: spec-author, primary: claude, fallback: codex }
-    judge:     { tier: cross_vendor, rubric: rfc-2119-normative@1, model_pref: gemini }
+    judge:     { tier: cross_vendor, rubric: rfc-2119-normative@1, model_pref: agy }
   - kind: architecture
     gate_type: design
     generator: { agent: architect, primary: claude }
@@ -156,7 +156,7 @@ stages:
   - kind: contracts
     gate_type: contract
     generator: { agent: api-designer, primary: codex }
-    judge:     { tier: cross_vendor, rubric: openapi-3.1-stability@1, model_pref: gemini }
+    judge:     { tier: cross_vendor, rubric: openapi-3.1-stability@1, model_pref: agy }
   - kind: code
     gate_type: code_style
     generator: { agent: engineer, primary: codex }
@@ -165,7 +165,7 @@ stages:
     artifact_kind: test_plan
     gate_type: contract
     generator: { agent: test-strategist, primary: codex }
-    judge:     { tier: cross_vendor, model_pref: gemini }
+    judge:     { tier: cross_vendor, model_pref: agy }
   - kind: docs
     gate_type: docs_polish
     generator: { agent: docs-author, primary: claude }
