@@ -1,9 +1,17 @@
 import type { ArtifactDraft } from "../schemas/artifact.js";
 
 /**
- * Phase 0 stub. In Phase 1 this delegates to mcp__pp_harness__start_best_of_stage
- * to generate N variants of the requested artifact, then mcp__pp_harness__borda_count
- * to pick a winner. Until pp-bridge lands, we return the input draft unchanged.
+ * Best-of-N stub — the pp-bridge IS implemented.
+ *
+ * daemon/src/bridges/pp-bridge.ts is an MCP client that reads pp's .mcp.json
+ * and connects to the pair-programmer harness.  Two of its capabilities are
+ * already exposed as AgentSmith MCP tools in daemon/src/mcp/tools.ts:
+ *   - agentsmith.pp.best_of_start  (wraps pp start_best_of_stage)
+ *   - agentsmith.pp.borda_count    (wraps pp borda_count)
+ *
+ * THIS helper remains an unwired stub: it still returns the input draft
+ * unchanged and does not call the bridge.  Wiring bestOfN() to the bridge
+ * is tracked as future work (AS-GV-6).
  */
 export async function bestOfN(draft: ArtifactDraft, _n = 3): Promise<ArtifactDraft> {
   return draft;
