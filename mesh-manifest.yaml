@@ -50,6 +50,7 @@ mcp:
     # --- quarantine namespace ---
     - "agentsmith.quarantine.isolate"
     - "agentsmith.quarantine.release"
+    - "agentsmith.quarantine.list"
     # --- keymaker namespace ---
     - "agentsmith.keymaker.scan"
     - "agentsmith.keymaker.gap_report"
