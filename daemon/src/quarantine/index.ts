@@ -1,1 +1,6 @@
-export { Isolator, type QuarantineTicket } from "./isolator.js";
+export {
+  Isolator,
+  type QuarantineTicket,
+  type QuarantineDiagnostic,
+  type QuarantineListResult,
+} from "./isolator.js";

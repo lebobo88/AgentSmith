@@ -245,6 +245,12 @@ export function registerTools(kernel: SmithKernel): ToolMap {
       },
     },
     {
+      name: "agentsmith.quarantine.list",
+      description: "List persisted quarantine tickets without exposing quarantined payloads.",
+      inputSchema: z.object({}),
+      handler: async () => kernel.isolator.list(),
+    },
+    {
       name: "agentsmith.keymaker.scan",
       description: "Scan one or all consumer projects for installed agents/skills/commands/hooks/teams/squads/rubrics.",
       inputSchema: z.object({ project: ConsumerProjectSchema.optional() }),

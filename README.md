@@ -51,7 +51,7 @@ Every write to `.claude/*` in any sibling project passes through Smith's Inspect
 
 ## The Four Pillars
 
-AgentSmith is one daemon, four cooperating subsystems. Every pillar is **fail-closed** and emits decision records to the Archivist. The daemon exposes **29 MCP tools** under the `agentsmith.*` namespace (see [`docs/TOOLS.md`](./docs/TOOLS.md)).
+AgentSmith is one daemon, four cooperating subsystems. Every pillar is **fail-closed** and emits decision records to the Archivist. The daemon exposes **30 MCP tools** under the `agentsmith.*` namespace (see [`docs/TOOLS.md`](./docs/TOOLS.md)).
 
 | Pillar | Role | MCP Surface |
 |--------|------|-------------|
@@ -248,7 +248,7 @@ AgentSmith/
 │       ├── quarantine/                        isolation + HITL ticketing
 │       ├── bridges/                           MCP clients to Hydra, TheEights, pair-programmer
 │       ├── schemas/                           Zod schemas (artifact, anomaly, verdict, etc.)
-│       ├── mcp/                               MCP tool registration (29 tools)
+│       ├── mcp/                               MCP tool registration (30 tools)
 │       └── README.md                          pillar subdivision / module layout
 ├── .claude/
 │   ├── agents/                                9 sub-agents (smith-architect, inspector, etc.)
@@ -257,7 +257,7 @@ AgentSmith/
 │   └── hooks/                                 6 fail-closed pre/post-tool gate scripts
 ├── docs/
 │   ├── INSTALL.md                             detailed install/uninstall guide
-│   ├── TOOLS.md                               all 29 MCP tools grouped by pillar/namespace
+│   ├── TOOLS.md                               all 30 MCP tools grouped by pillar/namespace
 │   ├── RUBRICS.md                             the 4 Smith oracle rubrics
 │   ├── HOOKS.md                               the 6 .claude hooks → invariants they enforce
 │   └── THEEIGHTS-RESOURCE-KINDS.md            resource-kind extension manifest
@@ -359,7 +359,7 @@ graph LR
 - [**ARCHITECTURE.md**](./ARCHITECTURE.md) — pillar diagram, integration map, governance enforcement, failure modes
 - [**PERSONA.md**](./PERSONA.md) — Smith voice spec, what to encode vs. avoid
 - [**AGENTS.md**](./AGENTS.md) — canonical cross-tool behavioral contract
-- [**docs/TOOLS.md**](./docs/TOOLS.md) — all 29 MCP tools grouped by pillar / namespace
+- [**docs/TOOLS.md**](./docs/TOOLS.md) — all 30 MCP tools grouped by pillar / namespace
 - [**docs/RUBRICS.md**](./docs/RUBRICS.md) — the 4 Smith oracle rubrics under `rubrics/`
 - [**docs/HOOKS.md**](./docs/HOOKS.md) — the 6 `.claude/hooks/*.ps1` gates and the invariants they enforce
 - [**daemon/src/README.md**](./daemon/src/README.md) — daemon module layout / pillar subdivision

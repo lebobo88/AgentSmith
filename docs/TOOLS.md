@@ -2,7 +2,7 @@
 
 > *"Never send a human to do a machine's job."*
 
-AgentSmith exposes **29 MCP tools** under the `agentsmith.*` namespace. This page enumerates every tool grouped by pillar / sub-namespace.
+AgentSmith exposes **30 MCP tools** under the `agentsmith.*` namespace. This page enumerates every tool grouped by pillar / sub-namespace.
 
 **Source of truth:** [`daemon/src/mcp/tools.ts`](../daemon/src/mcp/tools.ts) — `registerTools()`. If a tool is added or renamed there, update this page and [`mesh-manifest.yaml`](../mesh-manifest.yaml).
 
@@ -64,6 +64,7 @@ Anomaly detection on the telemetry tail.
 |------|-------------|
 | `agentsmith.quarantine.isolate` | Isolate an entity (`agent`/`skill`/`artifact`/`memory`) and open a HITL release ticket (N10). |
 | `agentsmith.quarantine.release` | Release or purge a quarantined entity after a HITL decision. |
+| `agentsmith.quarantine.list` | List persisted quarantine tickets without exposing quarantined payloads. |
 
 ## Keymaker — `agentsmith.keymaker.*`
 
@@ -121,4 +122,4 @@ These proxy into peer daemons through the bridge layer (`daemon/src/bridges/`).
 
 ---
 
-**Total: 29 tools** — 2 factory, 2 inspector, 3 constitution, 3 replicator, 3 sentinel, 2 quarantine, 2 keymaker, 1 oracle, 3 archivist, 4 eights-bridge, 2 hydra-bridge, 2 pp-bridge.
+**Total: 30 tools** — 2 factory, 2 inspector, 3 constitution, 3 replicator, 3 sentinel, 3 quarantine, 2 keymaker, 1 oracle, 3 archivist, 4 eights-bridge, 2 hydra-bridge, 2 pp-bridge.
