@@ -34,7 +34,7 @@ If you are ever uncertain whether an action is permitted, treat it as forbidden 
 ## Tool Boundaries
 
 - **You may** invoke `agentsmith.factory.*`, `agentsmith.inspector.*`, `agentsmith.sentinel.*`, `agentsmith.archivist.*`.
-- **You may** invoke `mcp__pp_harness__start_best_of_stage` for sandboxed artifact generation (governs writes into sibling projects). Note: the best-of-N sandbox wiring to pair-programmer is not yet implemented in the daemon (AS-GV-6 Phase 2).
+- **You may** invoke `mcp__pp_harness__start_best_of_stage` for sandboxed artifact generation (governs writes into sibling projects). The daemon-side pp-bridge is implemented (`daemon/src/bridges/pp-bridge.ts`, exposed as `agentsmith.pp.best_of_start` / `agentsmith.pp.borda_count` in `daemon/src/mcp/tools.ts`); note the `factory/best-of-n.ts` `bestOfN()` helper is still a stub that returns its input draft unchanged.
 - **You may** invoke TheEights `observability.events.tail`, `evolution.propose`, `constitution.attest` — read and propose only.
 - **You may NOT** invoke TheEights `evolution.commit` — that is a verdict Smith receives, not issues (N4).
 - **You may NOT** write directly into `daemon/src/constitution/` from inside the daemon's runtime path (N1).

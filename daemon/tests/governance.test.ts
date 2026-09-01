@@ -7,7 +7,7 @@ import { EightsBridge, type SinkGateRefs } from "../src/bridges/eights-bridge.js
 import { buildN8RefusalTools, registerTools } from "../src/mcp/tools.js";
 import { checkSchema } from "../src/inspector/schema-checks.js";
 import type { SmithKernel } from "../src/mcp/tools.js";
-import { createN8AttestationController } from "../src/n8-attestation.js";
+import { createN8AttestationController, type N8AttestationSnapshot } from "../src/n8-attestation.js";
 
 /**
  * AS-GV governance tests — Reflexion-2 pass (sink-level enforcement).
@@ -481,18 +481,27 @@ describe("Issue 3 — constitutionAttest: mandatory comparison + TOCTOU", () => 
 // ============================================================================
 // Issue 4 — refusal map derived from registerTools (no regression)
 // ============================================================================
+/**
+ * A terminal (fail-closed) attestation snapshot — the state in which the gate
+ * must still answer with the unchanged N8 refusal. E2-10 only changed the
+ * *transport-degraded* state ("retrying") to a structured not_ready.
+ */
+function terminalSnapshot(detail: string): N8AttestationSnapshot {
+  return { mode: "terminal", attempt: 1, detail, retry_after_s: 0 };
+}
+
 describe("Issue 4 — buildN8RefusalTools: exact name-set equality (no regression)", () => {
   it("refusal map has EXACTLY the same tool names as the real tool map", () => {
     const kernel = makeKernel();
     const realTools = registerTools(kernel);
-    const refusalTools = buildN8RefusalTools(kernel, () => "test-detail");
+    const refusalTools = buildN8RefusalTools(kernel, () => terminalSnapshot("test-detail"));
 
     expect(new Set(refusalTools.keys())).toEqual(new Set(realTools.keys()));
   });
 
   it("every refusal handler returns ok:false, refused:true, detail preserved", async () => {
     const kernel = makeKernel();
-    const refusalTools = buildN8RefusalTools(kernel, () => "mismatch-detail");
+    const refusalTools = buildN8RefusalTools(kernel, () => terminalSnapshot("mismatch-detail"));
     for (const [name, tool] of refusalTools) {
       if (name === "agentsmith.constitution.reattest") {
         continue;
@@ -507,7 +516,7 @@ describe("Issue 4 — buildN8RefusalTools: exact name-set equality (no regressio
 
   it("refusal map schema rejects invalid input (real schema kept, not z.record fallback)", () => {
     const kernel = makeKernel();
-    const refusalTools = buildN8RefusalTools(kernel, () => "x");
+    const refusalTools = buildN8RefusalTools(kernel, () => terminalSnapshot("x"));
     const scaffold = refusalTools.get("agentsmith.factory.scaffold")!;
     expect(scaffold.inputSchema.safeParse({}).success).toBe(false);
   });
@@ -528,12 +537,13 @@ describe("Issue 4 — buildN8RefusalTools: exact name-set equality (no regressio
       log: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
     });
     kernel.attestation = attestation;
-    for (const [name, def] of buildN8RefusalTools(kernel, attestation.getDetail)) {
+    for (const [name, def] of buildN8RefusalTools(kernel, attestation.getSnapshot)) {
       tools.set(name, def);
     }
 
     const before = await tools.get("agentsmith.factory.scaffold")!.handler({});
-    expect((before as Record<string, unknown>).refused).toBe(true);
+    // Pre-attest the gate answers not_ready (E2-10), not an N8 refusal.
+    expect((before as Record<string, unknown>)["status"]).toBe("not_ready");
 
     const reattest = await tools.get("agentsmith.constitution.reattest")!.handler({});
     expect((reattest as Record<string, unknown>).ok).toBe(true);
@@ -557,7 +567,7 @@ describe("Issue 4 — buildN8RefusalTools: exact name-set equality (no regressio
       log: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
     });
     kernel.attestation = attestation;
-    for (const [name, def] of buildN8RefusalTools(kernel, attestation.getDetail)) {
+    for (const [name, def] of buildN8RefusalTools(kernel, attestation.getSnapshot)) {
       tools.set(name, def);
     }
 

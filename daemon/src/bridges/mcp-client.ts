@@ -10,10 +10,13 @@
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export interface McpServerConfig {
   /** Human-readable label, used in logs and as the client.name. */
@@ -66,8 +69,8 @@ interface SingletonLease {
 
 interface SingletonOps {
   isProcessAlive: (pid: number) => boolean;
-  getProcessCommandLine: (pid: number) => string | null;
-  killProcessTree: (pid: number) => boolean;
+  getProcessCommandLine: (pid: number) => Promise<string | null>;
+  killProcessTree: (pid: number) => Promise<boolean>;
 }
 
 export interface SingletonReapResult {
@@ -85,34 +88,40 @@ const defaultSingletonOps: SingletonOps = {
       return false;
     }
   },
-  getProcessCommandLine: (pid) => {
+  getProcessCommandLine: async (pid) => {
     try {
       if (process.platform === "win32") {
         const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if ($p) { [Console]::Out.Write($p.CommandLine) }`;
-        return execFileSync(
+        const { stdout } = await execFileAsync(
           "powershell",
           ["-NoProfile", "-NonInteractive", "-Command", script],
           { encoding: "utf8", windowsHide: true, timeout: 2000 },
-        ).trim() || null;
+        );
+        return stdout.trim() || null;
       }
-      return execFileSync(
+      const { stdout } = await execFileAsync(
         "ps",
         ["-p", String(pid), "-o", "args="],
         { encoding: "utf8", timeout: 2000 },
-      ).trim() || null;
+      );
+      return stdout.trim() || null;
     } catch {
       return null;
     }
   },
-  killProcessTree: (pid) => {
+  killProcessTree: async (pid) => {
     try {
       if (process.platform === "win32") {
-        const result = spawnSync(
-          "taskkill",
-          ["/PID", String(pid), "/T", "/F"],
-          { stdio: "ignore", windowsHide: true, timeout: 5000 },
-        );
-        return result.status === 0;
+        try {
+          await execFileAsync(
+            "taskkill",
+            ["/PID", String(pid), "/T", "/F"],
+            { encoding: "utf8", windowsHide: true, timeout: 5000 },
+          );
+          return true;
+        } catch {
+          return false;
+        }
       }
       process.kill(pid, "SIGKILL");
       return true;
@@ -185,12 +194,12 @@ export function releaseSingletonLease(key: string, pid?: number | null): void {
   }
 }
 
-export function reapSingletonLease(
+export async function reapSingletonLease(
   key: string,
   expected: Pick<SingletonLease, "command" | "args">,
   log: BridgeLogger = consoleLogger,
   ops: Partial<SingletonOps> = {},
-): SingletonReapResult {
+): Promise<SingletonReapResult> {
   const lease = readSingletonLease(key);
   if (!lease) {
     releaseSingletonLease(key);
@@ -203,7 +212,7 @@ export function reapSingletonLease(
     return { action: "cleared", reason: "process-not-alive", pid: lease.pid };
   }
 
-  const commandLine = runtime.getProcessCommandLine(lease.pid);
+  const commandLine = await runtime.getProcessCommandLine(lease.pid);
   if (!commandLine) {
     log.warn(
       { bridge: key, pid: lease.pid },
@@ -224,7 +233,7 @@ export function reapSingletonLease(
     );
   }
 
-  if (!runtime.killProcessTree(lease.pid)) {
+  if (!(await runtime.killProcessTree(lease.pid))) {
     log.warn(
       { bridge: key, pid: lease.pid },
       "singleton lease matched a stale child but the reap failed",
@@ -262,9 +271,14 @@ export class McpClient {
     private readonly cfg: McpServerConfig,
     private readonly log: BridgeLogger = consoleLogger,
   ) {
-    const defaultConnectTimeoutMs = cfg.name === "eights"
-      ? Number(process.env["AGENTSMITH_EIGHTS_CONNECT_TIMEOUT_MS"] ?? 20000)
-      : 2000;
+    let defaultConnectTimeoutMs: number;
+    if (cfg.name === "eights") {
+      defaultConnectTimeoutMs = Number(process.env["AGENTSMITH_EIGHTS_CONNECT_TIMEOUT_MS"] ?? 20000);
+    } else if (cfg.name === "hydra") {
+      defaultConnectTimeoutMs = Number(process.env["AGENTSMITH_HYDRA_CONNECT_TIMEOUT_MS"] ?? 15000);
+    } else {
+      defaultConnectTimeoutMs = 2000;
+    }
     this.connectTimeoutMs = cfg.connectTimeoutMs ?? defaultConnectTimeoutMs;
   }
 
@@ -278,7 +292,7 @@ export class McpClient {
       let client: Client | null = null;
       try {
         if (this.cfg.singletonKey) {
-          const reap = reapSingletonLease(
+          const reap = await reapSingletonLease(
             this.cfg.singletonKey,
             { command: this.cfg.command, args: this.cfg.args },
             this.log,

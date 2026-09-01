@@ -224,10 +224,10 @@ async function main(): Promise<void> {
     },
   });
   kernel.attestation = attestation;
-  for (const [name, def] of buildN8RefusalTools(kernel, attestation.getDetail)) {
+  for (const [name, def] of buildN8RefusalTools(kernel, attestation.getSnapshot)) {
     tools.set(name, def);
   }
-  log.info({ tool_count: tools.size, mode: "n8-refusal" }, "agentsmith serving tools (N8-refusal) — attesting in background");
+  log.info({ tool_count: tools.size, mode: "n8-gated" }, "agentsmith serving tools (N8-gated: not_ready until attested) — attesting in background");
 
   // Wire tail watchers — best-effort. Each emitted event is classified;
   // a match publishes to the in-process watcher and seals a decision record.
@@ -279,8 +279,14 @@ async function main(): Promise<void> {
 
   // Tail watchers start after the transport is live. Each emitted event is
   // classified; a match publishes to the in-process watcher and seals a
-  // decision record. seekToEnd (in eights-tail/hydra-tail) ensures pre-existing
-  // history is not re-read synchronously.
+  // decision record. seekToEnd ensures pre-existing history is not re-read.
+  //
+  // E2-10: starting them "after startMcpServer" was NOT sufficient on its own —
+  // the boot scan used to be SYNCHRONOUS and unbounded, so on a mature install
+  // (~16.5k workflow dirs under <Hydra>/.hydra) it blocked the event loop for
+  // ~29s and then saturated it with ~16.5k per-file poll timers. The pending
+  // `initialize` frame sat unread in the stdin buffer the whole time. Both
+  // scans are now async and budgeted (see sentinel/tail-budget.ts).
   try {
     const hydraTail = startHydraTail(handleTailEvent, {
       onError: (err) => log.warn({ err: String(err) }, "hydra-tail error"),

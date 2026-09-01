@@ -1,8 +1,9 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { readdir, stat } from "node:fs/promises";
 import { nanoid } from "nanoid";
 import { tailJsonlFile } from "./tail.js";
 import { consumerRoots } from "../config.js";
+import { selectTailTargets, tailBudget, yieldToEventLoop, type TailCandidate } from "./tail-budget.js";
 import type { AnomalyEvent, AnomalySeverity } from "../schemas/anomaly.js";
 
 /** `<hydraRoot>/.hydra` — derived from consumerRoots (AIAPP_BASE/anchor based). */
@@ -15,6 +16,10 @@ export interface HydraTailOptions {
   hydraRoot?: string;
   scanIntervalMs?: number;
   onError?: (err: unknown) => void;
+  /** Max concurrently tailed trace files. Default from tailBudget(). */
+  maxFiles?: number;
+  /** Ignore traces whose mtime is older than this. Default from tailBudget(). */
+  maxAgeMs?: number;
 }
 
 /**
@@ -29,6 +34,11 @@ export function startHydraTail(
   const root = options.hydraRoot ?? defaultHydraRoot();
   const interval = options.scanIntervalMs ?? SCAN_INTERVAL_MS;
   const onError = options.onError ?? (() => undefined);
+  const defaults = tailBudget();
+  const budget = {
+    maxFiles: options.maxFiles ?? defaults.maxFiles,
+    maxAgeMs: options.maxAgeMs ?? defaults.maxAgeMs,
+  };
 
   const tails = new Map<string, { stop: () => void }>();
   let stopped = false;
@@ -62,33 +72,57 @@ export function startHydraTail(
     }
   };
 
-  const scan = (): void => {
+  // Async + budgeted (E2-10): the walk yields to the event loop and only the
+  // freshest `budget.maxFiles` traces are tailed, so a directory holding tens
+  // of thousands of historical workflows can never block the MCP transport.
+  const scan = async (): Promise<void> => {
     if (stopped) return;
-    if (!existsSync(root)) return;
     let entries: string[];
     try {
-      entries = readdirSync(root);
+      entries = await readdir(root);
     } catch (err) {
-      onError(err);
+      // Missing root is the normal "Hydra not installed here" case.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") onError(err);
       return;
     }
-    const seekToEnd = firstScan;
+
+    const candidates: TailCandidate[] = [];
+    let walked = 0;
     for (const name of entries) {
-      const dir = join(root, name);
+      if (stopped) return;
+      if (++walked % 200 === 0) await yieldToEventLoop();
+      const trace = join(root, name, "trace.jsonl");
       try {
-        const st = statSync(dir);
-        if (!st.isDirectory()) continue;
+        const st = await stat(trace);
+        if (!st.isFile()) continue;
+        candidates.push({ path: trace, scope: name, mtimeMs: st.mtimeMs });
       } catch {
         continue;
       }
-      const trace = join(dir, "trace.jsonl");
-      if (!tails.has(trace)) attach(name, trace, seekToEnd);
+    }
+    if (stopped) return;
+
+    const seekToEnd = firstScan;
+    for (const target of selectTailTargets(candidates, budget, new Set(tails.keys()))) {
+      if (stopped) return;
+      if (!tails.has(target.path)) attach(target.scope, target.path, seekToEnd);
     }
     firstScan = false;
   };
 
-  scan();
-  const timer = setInterval(scan, interval);
+  let scanning = false;
+  const runScan = (): void => {
+    if (scanning || stopped) return;
+    scanning = true;
+    void scan()
+      .catch(onError)
+      .finally(() => {
+        scanning = false;
+      });
+  };
+
+  runScan();
+  const timer = setInterval(runScan, interval);
 
   return {
     stop: () => {

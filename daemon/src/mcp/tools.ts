@@ -11,7 +11,12 @@ import { DecisionStore, buildAudit } from "../archivist/index.js";
 import { EightsBridge, HydraBridge, PpBridge, ConsumerBridge } from "../bridges/index.js";
 import { ArtifactKindSchema, ConsumerProjectSchema } from "../schemas/artifact.js";
 import type { SmithVerdict } from "../schemas/verdict.js";
-import type { N8AttestationController } from "../n8-attestation.js";
+import {
+  buildNotReadyResult,
+  buildRefusalResult,
+  type N8AttestationController,
+  type N8AttestationSnapshot,
+} from "../n8-attestation.js";
 
 /**
  * AS-GV-2: Venom guard — shared N2 enforcement helper.
@@ -524,7 +529,20 @@ export function registerTools(kernel: SmithKernel): ToolMap {
  * so the gateway doesn't time out, but every tool call returns the N8 refusal
  * envelope.
  */
-export function buildN8RefusalTools(kernel: SmithKernel, getAttestDetail: () => string): ToolMap {
+/**
+ * Build the pre-attestation tool map: every real tool name, no real behaviour.
+ *
+ * The answer depends on WHY attestation has not passed (E2-10):
+ *   - mode "retrying" (TheEights unreachable / still cold-starting) — a
+ *     structured `{ok:false, status:"not_ready", retry_after_s}` so a consumer
+ *     can back off and retry. This is NOT a constitutional refusal.
+ *   - mode "terminal" (hash mismatch / attest refused) — the unchanged N8
+ *     refusal `{ok:false, refused:true}`. Fail-closed, never lifted.
+ */
+export function buildN8RefusalTools(
+  kernel: SmithKernel,
+  getSnapshot: () => N8AttestationSnapshot,
+): ToolMap {
   const realTools = registerTools(kernel);
   const refusalMap: ToolMap = new Map();
   for (const [name, real] of realTools) {
@@ -534,15 +552,15 @@ export function buildN8RefusalTools(kernel: SmithKernel, getAttestDetail: () => 
     }
     refusalMap.set(name, {
       name,
-      description: `[N8-REFUSAL] ${name} is unavailable: constitution unattested.`,
+      description: `[N8-GATED] ${name} is unavailable until the constitution is attested.`,
       // Keep real inputSchema so ListTools reports correct parameter shapes.
       inputSchema: real.inputSchema,
-      handler: async (_args) => ({
-        ok: false,
-        refused: true,
-        reason: "N8: constitution unattested/mismatch — tools refused",
-        detail: getAttestDetail(),
-      }),
+      handler: async (_args) => {
+        const snapshot = getSnapshot();
+        return snapshot.mode === "terminal"
+          ? buildRefusalResult(snapshot)
+          : buildNotReadyResult(snapshot);
+      },
     });
   }
   return refusalMap;
