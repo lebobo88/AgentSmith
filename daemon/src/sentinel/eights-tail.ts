@@ -1,8 +1,9 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { nanoid } from "nanoid";
 import { tailJsonlFile } from "./tail.js";
+import { selectTailTargets, tailBudget, yieldToEventLoop, type TailCandidate } from "./tail-budget.js";
 import type { AnomalyEvent, AnomalySeverity } from "../schemas/anomaly.js";
 
 const SCAN_INTERVAL_MS = 5000;
@@ -11,6 +12,10 @@ export interface EightsTailOptions {
   eventsDir?: string;
   scanIntervalMs?: number;
   onError?: (err: unknown) => void;
+  /** Max concurrently tailed event logs. Default from tailBudget(). */
+  maxFiles?: number;
+  /** Ignore event logs whose mtime is older than this. Default from tailBudget(). */
+  maxAgeMs?: number;
 }
 
 /**
@@ -24,6 +29,11 @@ export function startEightsTail(
   const root = options.eventsDir ?? join(homedir(), ".eights", "events");
   const interval = options.scanIntervalMs ?? SCAN_INTERVAL_MS;
   const onError = options.onError ?? (() => undefined);
+  const defaults = tailBudget();
+  const budget = {
+    maxFiles: options.maxFiles ?? defaults.maxFiles,
+    maxAgeMs: options.maxAgeMs ?? defaults.maxAgeMs,
+  };
 
   const tails = new Map<string, { stop: () => void }>();
   let stopped = false;
@@ -58,33 +68,56 @@ export function startEightsTail(
     }
   };
 
-  const scan = (): void => {
+  // Async + budgeted (E2-10) — same rationale as hydra-tail: the boot scan must
+  // never block the MCP transport, and only recent event logs are worth tailing.
+  const scan = async (): Promise<void> => {
     if (stopped) return;
-    if (!existsSync(root)) return;
     let entries: string[];
     try {
-      entries = readdirSync(root);
+      entries = await readdir(root);
     } catch (err) {
-      onError(err);
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") onError(err);
       return;
     }
-    const seekToEnd = firstScan;
+
+    const candidates: TailCandidate[] = [];
+    let walked = 0;
     for (const name of entries) {
+      if (stopped) return;
       if (!name.endsWith(".jsonl")) continue;
+      if (++walked % 200 === 0) await yieldToEventLoop();
       const full = join(root, name);
       try {
-        const st = statSync(full);
+        const st = await stat(full);
         if (!st.isFile()) continue;
+        candidates.push({ path: full, scope: name, mtimeMs: st.mtimeMs });
       } catch {
         continue;
       }
-      if (!tails.has(full)) attach(full, seekToEnd);
+    }
+    if (stopped) return;
+
+    const seekToEnd = firstScan;
+    for (const target of selectTailTargets(candidates, budget, new Set(tails.keys()))) {
+      if (stopped) return;
+      if (!tails.has(target.path)) attach(target.path, seekToEnd);
     }
     firstScan = false;
   };
 
-  scan();
-  const timer = setInterval(scan, interval);
+  let scanning = false;
+  const runScan = (): void => {
+    if (scanning || stopped) return;
+    scanning = true;
+    void scan()
+      .catch(onError)
+      .finally(() => {
+        scanning = false;
+      });
+  };
+
+  runScan();
+  const timer = setInterval(runScan, interval);
 
   return {
     stop: () => {
