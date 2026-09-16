@@ -83,7 +83,10 @@ export function registerTools(kernel: SmithKernel): ToolMap {
   const tools: ToolDefinition[] = [
     {
       name: "agentsmith.factory.scaffold",
-      description: "Scaffold a candidate artifact (agent|skill|command|hook|team|squad|rubric|mcp).",
+      description:
+        "Scaffold a candidate artifact (agent|skill|command|hook|team|squad|rubric|mcp). " +
+        "'adr' and 'plan' are inspector-validated kinds only — they have no scaffold " +
+        "template and this tool throws for them; use agentsmith.inspector.inspect instead.",
       inputSchema: z.object({
         kind: ArtifactKindSchema,
         slug: z.string(),
@@ -251,7 +254,7 @@ export function registerTools(kernel: SmithKernel): ToolMap {
     },
     {
       name: "agentsmith.keymaker.scan",
-      description: "Scan one or all consumer projects for installed agents/skills/commands/hooks/teams/squads/rubrics.",
+      description: "Scan one or all consumer projects for installed agents/skills/commands/hooks/teams/squads/rubrics/plan artifacts (docs/plans/*.json).",
       inputSchema: z.object({ project: ConsumerProjectSchema.optional() }),
       handler: async (args) => {
         const a = args as { project?: any };
