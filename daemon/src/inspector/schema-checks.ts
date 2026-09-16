@@ -49,6 +49,9 @@ export function checkSchema(input: SchemaCheckInput): SmithVerdict {
   if (input.kind === "adr") {
     return checkAdr(input.content, now);
   }
+  if (input.kind === "plan") {
+    return checkPlan(input.content, now);
+  }
 
   const schema = PROJECT_SCHEMAS[project]?.[input.kind];
   if (!schema) {
@@ -245,6 +248,188 @@ function checkAdr(content: string, now: string): SmithVerdict {
   return passVerdict(
     now,
     "ADR has valid frontmatter (status/date/deciders) and required body sections",
+  );
+}
+
+/**
+ * Plan artifact validator.
+ *
+ * Validates the JSON companion Hydra writes for its `PLAN` envelope
+ * (`hydra_core/plan_artifact.py::render_plan_json`, i.e.
+ * `Plan.model_dump(mode="json")` from `hydra_core/schemas.py::Plan` /
+ * `PlanStep`). This does NOT duplicate Hydra's `envelope_type` registry
+ * (`SCHEMA_REGISTRY`) — a step's `envelope_type` is only checked for being a
+ * non-empty string here; Hydra's own `PlanStep._known_type` validator is the
+ * source of truth for which envelope types actually exist.
+ *
+ * Deny rules (fail-closed, N7):
+ *   - content is not valid JSON, or not a JSON object
+ *   - type !== "PLAN"
+ *   - rigor is not one of trivial | standard | major
+ *   - goal_restatement or summary is missing / empty / whitespace-only
+ *   - steps is not an array
+ *   - any step lacks a non-empty string step_id, target_squad, envelope_type,
+ *     or description
+ *   - duplicate step_id
+ *   - a depends_on entry names no known step, names its own step, or the
+ *     depends_on graph contains a cycle
+ *   - plan_revision is present and is not an integer >= 1
+ *   - rigor is standard/major and some step has zero acceptance_criteria
+ */
+const PLAN_RIGOR_VALUES = ["trivial", "standard", "major"] as const;
+
+function checkPlan(content: string, now: string): SmithVerdict {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err) {
+    return failVerdict(now, `plan artifact is not valid JSON: ${String(err)}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return failVerdict(now, "plan artifact must be a JSON object");
+  }
+  const plan = parsed as Record<string, unknown>;
+
+  if (plan["type"] !== "PLAN") {
+    return failVerdict(
+      now,
+      `plan artifact field "type" must be "PLAN", got ${JSON.stringify(plan["type"])}`,
+    );
+  }
+
+  const rigor = plan["rigor"];
+  if (typeof rigor !== "string" || !(PLAN_RIGOR_VALUES as readonly string[]).includes(rigor)) {
+    return failVerdict(
+      now,
+      `plan artifact field "rigor" must be one of ${PLAN_RIGOR_VALUES.join(", ")}, got ${JSON.stringify(rigor)}`,
+    );
+  }
+
+  const goalRestatement = plan["goal_restatement"];
+  if (typeof goalRestatement !== "string" || goalRestatement.trim().length === 0) {
+    return failVerdict(now, "plan artifact field \"goal_restatement\" is missing or empty");
+  }
+
+  const summary = plan["summary"];
+  if (typeof summary !== "string" || summary.trim().length === 0) {
+    return failVerdict(now, "plan artifact field \"summary\" is missing or empty");
+  }
+
+  const steps = plan["steps"];
+  if (!Array.isArray(steps)) {
+    return failVerdict(now, "plan artifact field \"steps\" must be an array");
+  }
+
+  // Per-step shape checks.
+  for (const raw of steps) {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return failVerdict(now, "plan artifact has a step that is not a JSON object");
+    }
+    const step = raw as Record<string, unknown>;
+    const stepId = step["step_id"];
+    const label = typeof stepId === "string" && stepId.length > 0 ? stepId : "<unknown step>";
+    for (const field of ["step_id", "target_squad", "envelope_type", "description"] as const) {
+      const v = step[field];
+      if (typeof v !== "string" || v.trim().length === 0) {
+        return failVerdict(
+          now,
+          `plan step ${label} is missing required non-empty string field "${field}"`,
+        );
+      }
+    }
+  }
+
+  // Duplicate step_id.
+  const stepIds: string[] = steps.map((s) => (s as Record<string, unknown>)["step_id"] as string);
+  const seen = new Set<string>();
+  for (const id of stepIds) {
+    if (seen.has(id)) {
+      return failVerdict(now, `plan step ${id} is a duplicate step_id`);
+    }
+    seen.add(id);
+  }
+  const knownIds = seen;
+
+  // Dependency validity: dangling refs + self-dependency.
+  const dependsOnByStep = new Map<string, string[]>();
+  for (const raw of steps) {
+    const step = raw as Record<string, unknown>;
+    const stepId = step["step_id"] as string;
+    const dependsOnRaw = step["depends_on"];
+    const dependsOn: string[] = Array.isArray(dependsOnRaw)
+      ? dependsOnRaw.filter((d): d is string => typeof d === "string")
+      : [];
+    dependsOnByStep.set(stepId, dependsOn);
+
+    if (dependsOn.includes(stepId)) {
+      return failVerdict(now, `plan step ${stepId} depends on itself`);
+    }
+    for (const dep of dependsOn) {
+      if (!knownIds.has(dep)) {
+        return failVerdict(
+          now,
+          `plan step ${stepId} depends on unknown step_id "${dep}" (dangling dependency)`,
+        );
+      }
+    }
+  }
+
+  // Cycle detection via DFS (white/gray/black coloring).
+  const WHITE = 0, GRAY = 1, BLACK = 2;
+  const color = new Map<string, number>();
+  for (const id of stepIds) color.set(id, WHITE);
+  let cycleStep: string | null = null;
+  const visit = (id: string): boolean => {
+    color.set(id, GRAY);
+    for (const dep of dependsOnByStep.get(id) ?? []) {
+      const depColor = color.get(dep);
+      if (depColor === GRAY) {
+        cycleStep = id;
+        return true;
+      }
+      if (depColor === WHITE && visit(dep)) return true;
+    }
+    color.set(id, BLACK);
+    return false;
+  };
+  for (const id of stepIds) {
+    if (color.get(id) === WHITE && visit(id)) break;
+  }
+  if (cycleStep) {
+    return failVerdict(now, `plan step ${cycleStep} is part of a dependency cycle`);
+  }
+
+  // plan_revision, if present, must be an integer >= 1.
+  if ("plan_revision" in plan) {
+    const rev = plan["plan_revision"];
+    if (typeof rev !== "number" || !Number.isInteger(rev) || rev < 1) {
+      return failVerdict(
+        now,
+        `plan artifact field "plan_revision" must be an integer >= 1, got ${JSON.stringify(rev)}`,
+      );
+    }
+  }
+
+  // The plan critic never blesses a step without an acceptance criterion at
+  // standard/major rigor.
+  if (rigor === "standard" || rigor === "major") {
+    for (const raw of steps) {
+      const step = raw as Record<string, unknown>;
+      const stepId = step["step_id"] as string;
+      const criteria = step["acceptance_criteria"];
+      const count = Array.isArray(criteria) ? criteria.length : 0;
+      if (count === 0) {
+        return failVerdict(
+          now,
+          `plan step ${stepId} has zero acceptance_criteria, which is required at rigor="${rigor}"`,
+        );
+      }
+    }
+  }
+
+  return passVerdict(
+    now,
+    `plan conforms to the Hydra PLAN envelope (rigor=${rigor}, ${steps.length} step(s))`,
   );
 }
 
