@@ -43,6 +43,11 @@ const LOCATIONS: KindLocation[] = [
     slugFrom: (f) => (f.endsWith("/squad.yaml") || f.endsWith("\\squad.yaml") ? f.replace(/[\\/]squad\.yaml$/, "") : null),
   },
   { kind: "rubric", dir: "rubrics", slugFrom: (f) => (f.endsWith(".yaml") ? f.replace(/\.yaml$/, "") : null) },
+  {
+    kind: "plan",
+    dir: "docs/plans",
+    slugFrom: (f) => (f.endsWith(".json") ? f.replace(/\.json$/, "") : null),
+  },
 ];
 
 export class Registry {

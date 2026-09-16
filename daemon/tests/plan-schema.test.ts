@@ -1,7 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { checkSchema } from "../src/inspector/schema-checks.js";
 import { ARTIFACT_KINDS } from "../src/schemas/artifact.js";
 import { Factory } from "../src/factory/generator.js";
+import { Registry } from "../src/keymaker/registry.js";
 import type { AgentSmithConfig } from "../src/config.js";
 
 /**
@@ -303,11 +307,187 @@ describe("X2 — plan artifact kind + checkPlan validator", () => {
     expect(v.rationale).toMatch(/acceptance_criteria/);
   });
 
-  it("denies a standard-rigor step with zero acceptance_criteria", () => {
+  it("denies a standard-rigor step with zero acceptance_criteria — the default Hydra shape — " +
+    "citing governance policy, not schema parity", () => {
+    // `PlanStep.acceptance_criteria: list[str] = Field(default_factory=list)`
+    // — an empty list here is exactly what a fresh Hydra PlanStep looks like
+    // before the plan author fills it in. Hydra's schema alone allows this;
+    // this deny is a deliberate, stricter governance policy on top of it.
     const plan = { ...VALID_PLAN, rigor: "standard", steps: [step({ acceptance_criteria: [] })] };
     const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
     expect(v.outcome).toBe("deny");
     expect(v.rationale).toMatch(/acceptance_criteria/);
+    expect(v.rationale).toMatch(/governance policy/i);
+    expect(v.rationale).toMatch(/stricter/i);
+  });
+
+  it("denies non-array depends_on on a step", () => {
+    const plan = withSteps([step({ step_id: "s1", depends_on: {} as unknown as string[] })]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/s1/);
+    expect(v.rationale).toMatch(/depends_on/);
+    expect(v.rationale).toMatch(/array/);
+  });
+
+  it("denies a depends_on array containing a non-string entry", () => {
+    const plan = withSteps([step({ step_id: "s1", depends_on: [42] as unknown as string[] })]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/s1/);
+    expect(v.rationale).toMatch(/depends_on/);
+  });
+
+  it("denies a depends_on array containing an empty-string entry", () => {
+    const plan = withSteps([step({ step_id: "s1", depends_on: [""] })]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/s1/);
+    expect(v.rationale).toMatch(/depends_on/);
+  });
+
+  it("denies non-array acceptance_criteria on a step", () => {
+    const plan = withSteps([
+      step({ step_id: "s1", acceptance_criteria: "not-an-array" as unknown as string[] }),
+    ]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/s1/);
+    expect(v.rationale).toMatch(/acceptance_criteria/);
+  });
+
+  it("denies acceptance_criteria containing a non-string entry", () => {
+    const plan = withSteps([step({ step_id: "s1", acceptance_criteria: [42] as unknown as string[] })]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/s1/);
+    expect(v.rationale).toMatch(/acceptance_criteria/);
+  });
+
+  it("allows a diamond dependency graph (a<-b,c ; b,c<-d)", () => {
+    const plan = withSteps([
+      step({ step_id: "d", depends_on: [] }),
+      step({ step_id: "b", depends_on: ["d"] }),
+      step({ step_id: "c", depends_on: ["d"] }),
+      step({ step_id: "a", depends_on: ["b", "c"] }),
+    ]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("allow");
+  });
+
+  it("allows disconnected components in the dependency graph", () => {
+    const plan = withSteps([
+      step({ step_id: "a1", depends_on: [] }),
+      step({ step_id: "a2", depends_on: ["a1"] }),
+      step({ step_id: "b1", depends_on: [] }),
+      step({ step_id: "b2", depends_on: ["b1"] }),
+    ]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("allow");
+  });
+
+  for (const protoId of ["__proto__", "constructor", "toString"]) {
+    it(`treats "${protoId}" as an ordinary step_id (used as an id and as a depends_on target)`, () => {
+      const plan = withSteps([
+        step({ step_id: protoId, depends_on: [] }),
+        step({ step_id: "s2", depends_on: [protoId] }),
+      ]);
+      const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+      expect(v.outcome).toBe("allow");
+    });
+  }
+
+  it("denies a non-object step, naming its array index", () => {
+    const plan = withSteps(["not-an-object" as unknown as Record<string, unknown>]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/step\[0\]/);
+  });
+
+  it("denies a non-object step among valid ones, naming its index (not step_id)", () => {
+    const plan = withSteps([step({ step_id: "s1" }), "not-an-object" as unknown as Record<string, unknown>]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/step\[1\]/);
+  });
+
+  it("gives plan denials a plan-specific suggested_fix, not the frontmatter remediation text", () => {
+    const v = checkSchema({ kind: "plan", content: "{not json" });
+    expect(v.outcome).toBe("deny");
+    expect(v.suggested_fix).toMatch(/Plan schema|plan_artifact|docs\/plans/i);
+    expect(v.suggested_fix).not.toMatch(/frontmatter/i);
+  });
+
+  it("allows a deep acyclic dependency chain (20,000 steps) without throwing, and finishes quickly", () => {
+    const n = 20_000;
+    const steps = Array.from({ length: n }, (_, i) =>
+      step({ step_id: `s${i}`, depends_on: i === 0 ? [] : [`s${i - 1}`] }),
+    );
+    const plan = withSteps(steps);
+    const started = Date.now();
+    let v: ReturnType<typeof checkSchema>;
+    expect(() => {
+      v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    }).not.toThrow();
+    expect(v!.outcome).toBe("allow");
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("denies a deep dependency chain (20,000 steps) closed into a cycle, without throwing", () => {
+    const n = 20_000;
+    const steps = Array.from({ length: n }, (_, i) =>
+      step({ step_id: `s${i}`, depends_on: i === 0 ? [`s${n - 1}`] : [`s${i - 1}`] }),
+    );
+    const plan = withSteps(steps);
+    let v: ReturnType<typeof checkSchema>;
+    expect(() => {
+      v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    }).not.toThrow();
+    expect(v!.outcome).toBe("deny");
+    expect(v!.rationale).toMatch(/cycle/);
+  });
+
+  describe("exception-to-deny wrapper", () => {
+    it("checkSchema never throws for the 'plan' kind even on maximally malformed input", () => {
+      expect(() => checkSchema({ kind: "plan", content: "" })).not.toThrow();
+      expect(() => checkSchema({ kind: "plan", content: "null" })).not.toThrow();
+      expect(() => checkSchema({ kind: "plan", content: "42" })).not.toThrow();
+      expect(checkSchema({ kind: "plan", content: "" }).outcome).toBe("deny");
+    });
+  });
+
+  describe("keymaker registry — plan location", () => {
+    let scratchBase: string;
+
+    afterEach(() => {
+      if (scratchBase) rmSync(scratchBase, { recursive: true, force: true });
+    });
+
+    it("scans docs/plans/*.json as kind='plan'", () => {
+      scratchBase = mkdtempSync(join(tmpdir(), "agentsmith-plan-registry-"));
+      const plansDir = join(scratchBase, "docs", "plans");
+      mkdirSync(plansDir, { recursive: true });
+      writeFileSync(join(plansDir, "add-a-customer-data-export-feature-with-a-docume-5a03e1b5.json"), "{}");
+
+      const cfg: AgentSmithConfig = {
+        agentsmithHome: join(scratchBase, ".agentsmith"),
+        statePath: join(scratchBase, ".agentsmith", "state.db"),
+        decisionsPath: join(scratchBase, ".agentsmith", "decisions.jsonl"),
+        quarantineDir: join(scratchBase, ".agentsmith", "quarantine"),
+        registryCachePath: join(scratchBase, ".agentsmith", "registry-cache.json"),
+        logsDir: join(scratchBase, ".agentsmith", "logs"),
+        constitutionPath: join(scratchBase, ".agentsmith", "constitution.md"),
+        consumerRoots: { hydra: scratchBase },
+        replicationQuotaPerScope: 4,
+        keymakerScanBudgetMs: 500,
+        inspectorBudgetMs: 200,
+      };
+      const registry = new Registry(cfg);
+      const snapshot = registry.scan("hydra");
+      const planEntries = snapshot.entries.filter((e) => e.kind === "plan");
+      expect(planEntries).toHaveLength(1);
+      expect(planEntries[0]?.slug).toBe("add-a-customer-data-export-feature-with-a-docume-5a03e1b5");
+    });
   });
 
   it("Factory.scaffold refuses the 'plan' kind with an explicit error (no template)", () => {
