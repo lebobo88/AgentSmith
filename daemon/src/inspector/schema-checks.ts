@@ -305,12 +305,46 @@ function checkAdr(content: string, now: string): SmithVerdict {
  */
 const PLAN_RIGOR_VALUES = ["trivial", "standard", "major"] as const;
 
+const MAX_VALUE_LENGTH_IN_RATIONALE = 64;
+
+/**
+ * Render ANY single value echoed from untrusted plan input (a step id, a
+ * depends_on target, a rigor/type/plan_revision value, etc.) for a deny
+ * rationale. This is the ONE formatter every echoed value in this file must
+ * go through before it is interpolated into a rationale string:
+ *   - truncated to MAX_VALUE_LENGTH_IN_RATIONALE characters, so an
+ *     adversarially long value (e.g. a 100 MB step_id) cannot blow up
+ *     rationale length or downstream log/HITL storage;
+ *   - JSON-escaped (via JSON.stringify of the truncated value), so a
+ *     newline-containing value cannot forge new lines in logs/HITL output,
+ *     and the value is unambiguously delimited from the surrounding text.
+ * Rationales are surfaced verbatim (logs, HITL tickets, CLI output) — never
+ * interpolate a raw echoed value directly.
+ */
+function formatEchoedValue(v: unknown): string {
+  let s: string;
+  if (typeof v === "string") {
+    s = v;
+  } else {
+    try {
+      const encoded = JSON.stringify(v);
+      s = encoded === undefined ? String(v) : encoded;
+    } catch {
+      s = String(v);
+    }
+  }
+  const truncated =
+    s.length > MAX_VALUE_LENGTH_IN_RATIONALE ? `${s.slice(0, MAX_VALUE_LENGTH_IN_RATIONALE)}…` : s;
+  return JSON.stringify(truncated);
+}
+
 /** Human-readable label for a step in a deny rationale: its step_id when
  * usable, otherwise its array index (e.g. for a step with a missing/blank
- * step_id, or a step that isn't even an object yet). */
+ * step_id, or a step that isn't even an object yet). Routed through
+ * `formatEchoedValue` — a step_id is untrusted input. */
 function stepLabel(step: Record<string, unknown>, idx: number): string {
   const id = step["step_id"];
-  return typeof id === "string" && id.trim().length > 0 ? `"${id}"` : `step[${idx}]`;
+  return typeof id === "string" && id.trim().length > 0 ? formatEchoedValue(id) : `step[${idx}]`;
 }
 
 // POLICY: plan artifacts must be strict RFC 8259 JSON. Python's `json.dumps`
@@ -323,33 +357,148 @@ function stepLabel(step: Record<string, unknown>, idx: number): string {
 // the generic "not valid JSON" message, so the fix is obvious: re-serialize
 // with finite numbers (or a JSON-legal string/null placeholder), not "make
 // this parser accept NaN".
-const BARE_NON_FINITE_TOKEN = /\b(?:NaN|Infinity)\b/;
+const NON_FINITE_TOKENS = ["NaN", "Infinity"] as const;
+
+/** True if `ch` can extend an identifier/number token (used for word-boundary
+ * checks around a candidate NaN/Infinity match). */
+function isWordChar(ch: string): boolean {
+  return /[A-Za-z0-9_]/.test(ch);
+}
 
 /** True if `content` contains a bare (unquoted) NaN/Infinity/-Infinity token
- * outside of any JSON string literal. Strips well-formed JSON string
- * literals first (handling `\"` and other backslash escapes) so a string
- * value that merely contains the word "NaN" is not flagged. */
+ * outside of any JSON string literal.
+ *
+ * This is a single linear (O(n)) left-to-right scan that tracks whether the
+ * cursor is inside a JSON string literal (honoring backslash escapes,
+ * including an escaped backslash immediately before a closing quote), rather
+ * than a regex-based "strip strings, then test" approach. A prior
+ * regex-based implementation (`/"(?:\\.|[^"\\])*"/g`) was quadratic on
+ * adversarial input — e.g. ~200,000 alternating `\` / `"` characters, which
+ * never close a string, forced the engine to retry the unterminated-string
+ * match from every subsequent quote — taking upward of 15s. The manual scan
+ * below is immune to that: no backtracking, exactly one pass. */
 function hasBareNonFiniteToken(content: string): boolean {
-  const withoutStrings = content.replace(/"(?:\\.|[^"\\])*"/g, '""');
-  return BARE_NON_FINITE_TOKEN.test(withoutStrings);
+  let inString = false;
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i];
+    if (inString) {
+      if (c === "\\") {
+        i++; // the following character is escaped; never treat it as a closing quote
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    for (const token of NON_FINITE_TOKENS) {
+      if (content.startsWith(token, i)) {
+        const before = i > 0 ? content[i - 1]! : "";
+        const after = content[i + token.length] ?? "";
+        if (!isWordChar(before) && !isWordChar(after)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 const MAX_IDS_IN_RATIONALE = 10;
-const MAX_ID_LENGTH_IN_RATIONALE = 64;
 
-/** Render a bounded, JSON-escaped list of step ids for a deny rationale.
- * Denial rationales are surfaced verbatim (logs, HITL tickets, CLI output);
- * an unbounded or adversarially long step_id must never be allowed to blow
- * up a rationale string. At most `MAX_IDS_IN_RATIONALE` ids are shown, each
- * truncated to `MAX_ID_LENGTH_IN_RATIONALE` characters, and any remainder is
- * summarized as a count rather than dropped silently. */
+/** Render a bounded list of step ids for a deny rationale, each rendered via
+ * `formatEchoedValue` (truncated + JSON-escaped). Denial rationales are
+ * surfaced verbatim (logs, HITL tickets, CLI output); an unbounded list of
+ * ids must never be allowed to blow up a rationale string. At most
+ * `MAX_IDS_IN_RATIONALE` ids are shown, and any remainder is summarized as a
+ * count rather than dropped silently. */
 function formatIdListBounded(ids: readonly string[]): string {
-  const shown = ids.slice(0, MAX_IDS_IN_RATIONALE).map((id) => {
-    const truncated = id.length > MAX_ID_LENGTH_IN_RATIONALE ? `${id.slice(0, MAX_ID_LENGTH_IN_RATIONALE)}…` : id;
-    return JSON.stringify(truncated);
-  });
+  const shown = ids.slice(0, MAX_IDS_IN_RATIONALE).map((id) => formatEchoedValue(id));
   const remaining = ids.length - shown.length;
   return remaining > 0 ? `${shown.join(", ")}, and ${remaining} more` : shown.join(", ");
+}
+
+/**
+ * Compute the true cyclic members of a dependency graph, restricted to the
+ * `remaining` (Kahn-residual) step ids. Kahn's residual set over-reports: a
+ * step that merely DEPENDS ON a cycle (but is not itself on the cycle) is
+ * also left undrained (e.g. `c` depends on `a` in `a<->b` plus `c->a`), so
+ * naming the whole residual as "the cycle" is wrong. This computes strongly
+ * connected components (iterative Tarjan's algorithm — no recursion, so a
+ * plan with tens of thousands of steps cannot overflow the call stack) over
+ * the induced subgraph on `remaining`, and returns the union of every SCC of
+ * size > 1 (a size-1 SCC is not a cycle; true self-dependencies are already
+ * denied earlier and never reach this function).
+ */
+function findCyclicStepIds(
+  remaining: readonly string[],
+  dependsOnByStep: ReadonlyMap<string, readonly string[]>,
+): string[] {
+  const remainingSet = new Set(remaining);
+  const edgesOf = (id: string): string[] => (dependsOnByStep.get(id) ?? []).filter((d) => remainingSet.has(d));
+
+  const index = new Map<string, number>();
+  const lowlink = new Map<string, number>();
+  const onStack = new Set<string>();
+  const tarjanStack: string[] = [];
+  const cyclic = new Set<string>();
+  let counter = 0;
+
+  interface Frame {
+    node: string;
+    edges: string[];
+    edgeIdx: number;
+  }
+
+  for (const start of remaining) {
+    if (index.has(start)) continue;
+    const work: Frame[] = [{ node: start, edges: edgesOf(start), edgeIdx: 0 }];
+    index.set(start, counter);
+    lowlink.set(start, counter);
+    counter++;
+    tarjanStack.push(start);
+    onStack.add(start);
+
+    while (work.length > 0) {
+      const frame = work[work.length - 1]!;
+      if (frame.edgeIdx < frame.edges.length) {
+        const next = frame.edges[frame.edgeIdx]!;
+        frame.edgeIdx++;
+        if (!index.has(next)) {
+          index.set(next, counter);
+          lowlink.set(next, counter);
+          counter++;
+          tarjanStack.push(next);
+          onStack.add(next);
+          work.push({ node: next, edges: edgesOf(next), edgeIdx: 0 });
+        } else if (onStack.has(next)) {
+          lowlink.set(frame.node, Math.min(lowlink.get(frame.node)!, index.get(next)!));
+        }
+      } else {
+        work.pop();
+        const parent = work[work.length - 1];
+        if (parent) {
+          lowlink.set(parent.node, Math.min(lowlink.get(parent.node)!, lowlink.get(frame.node)!));
+        }
+        if (lowlink.get(frame.node) === index.get(frame.node)) {
+          const component: string[] = [];
+          let member: string;
+          do {
+            member = tarjanStack.pop()!;
+            onStack.delete(member);
+            component.push(member);
+          } while (member !== frame.node);
+          if (component.length > 1) {
+            for (const m of component) cyclic.add(m);
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(cyclic);
 }
 
 function checkPlan(content: string, now: string): SmithVerdict {
@@ -390,7 +539,7 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
   if (plan["type"] !== "PLAN") {
     return failPlanVerdict(
       now,
-      `plan artifact field "type" must be "PLAN", got ${JSON.stringify(plan["type"])}`,
+      `plan artifact field "type" must be "PLAN", got ${formatEchoedValue(plan["type"])}`,
     );
   }
 
@@ -398,7 +547,7 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
   if (typeof rigor !== "string" || !(PLAN_RIGOR_VALUES as readonly string[]).includes(rigor)) {
     return failPlanVerdict(
       now,
-      `plan artifact field "rigor" must be one of ${PLAN_RIGOR_VALUES.join(", ")}, got ${JSON.stringify(rigor)}`,
+      `plan artifact field "rigor" must be one of ${PLAN_RIGOR_VALUES.join(", ")}, got ${formatEchoedValue(rigor)}`,
     );
   }
 
@@ -469,7 +618,7 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
           return failPlanVerdict(
             now,
             `plan step ${label} field "depends_on" must contain only non-empty step_id strings, ` +
-              `got ${JSON.stringify(d)}`,
+              `got ${formatEchoedValue(d)}`,
           );
         }
         dependsOn.push(d);
@@ -509,7 +658,7 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
   const knownIds = new Set<string>();
   for (const id of stepIds) {
     if (knownIds.has(id)) {
-      return failPlanVerdict(now, `plan step "${id}" is a duplicate step_id`);
+      return failPlanVerdict(now, `plan step ${formatEchoedValue(id)} is a duplicate step_id`);
     }
     knownIds.add(id);
   }
@@ -518,13 +667,13 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
   for (const id of stepIds) {
     const dependsOn = dependsOnByStep.get(id) ?? [];
     if (dependsOn.includes(id)) {
-      return failPlanVerdict(now, `plan step "${id}" depends on itself`);
+      return failPlanVerdict(now, `plan step ${formatEchoedValue(id)} depends on itself`);
     }
     for (const dep of dependsOn) {
       if (!knownIds.has(dep)) {
         return failPlanVerdict(
           now,
-          `plan step "${id}" depends on unknown step_id "${dep}" (dangling dependency)`,
+          `plan step ${formatEchoedValue(id)} depends on unknown step_id ${formatEchoedValue(dep)} (dangling dependency)`,
         );
       }
     }
@@ -563,9 +712,14 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
   }
   const remaining = stepIds.filter((id) => !drained.has(id));
   if (remaining.length > 0) {
+    // Kahn's residual over-reports: it also includes steps that merely
+    // depend (possibly transitively) on a cycle without being part of one
+    // themselves. Narrow to the true cyclic members via SCC before naming
+    // anyone in the rationale.
+    const cyclicIds = findCyclicStepIds(remaining, dependsOnByStep).sort();
     return failPlanVerdict(
       now,
-      `plan has a dependency cycle among steps: ${formatIdListBounded(remaining.sort())}`,
+      `plan has a dependency cycle among steps: ${formatIdListBounded(cyclicIds)}`,
     );
   }
 
@@ -575,7 +729,7 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
     if (typeof rev !== "number" || !Number.isInteger(rev) || rev < 1) {
       return failPlanVerdict(
         now,
-        `plan artifact field "plan_revision" must be an integer >= 1, got ${JSON.stringify(rev)}`,
+        `plan artifact field "plan_revision" must be an integer >= 1, got ${formatEchoedValue(rev)}`,
       );
     }
   }
@@ -590,8 +744,8 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
       if (count === 0) {
         return failPlanVerdict(
           now,
-          `plan step "${id}" has zero acceptance_criteria — governance policy (stricter than ` +
-            `Hydra's schema) requires >= 1 at rigor="${rigor}"`,
+          `plan step ${formatEchoedValue(id)} has zero acceptance_criteria — governance policy ` +
+            `(stricter than Hydra's schema) requires >= 1 at rigor=${formatEchoedValue(rigor)}`,
         );
       }
     }

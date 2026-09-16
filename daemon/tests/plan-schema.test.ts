@@ -455,6 +455,46 @@ describe("X2 — plan artifact kind + checkPlan validator", () => {
     expect(v.outcome).toBe("allow");
   });
 
+  it("allows a string containing an escaped quote followed by the word NaN (still valid JSON)", () => {
+    // Content: a string literal whose value is `a " NaN` — the escaped quote
+    // must not confuse the string-stripping regex into leaving a bare NaN
+    // token exposed.
+    const plan = { ...VALID_PLAN, summary: 'field contains a " NaN quote and is otherwise valid' };
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("allow");
+  });
+
+  it("gives the generic invalid-JSON rationale (not the non-finite one) when JSON with an " +
+    "escaped-quote-then-NaN string is ALSO invalid for another reason (trailing comma)", () => {
+    const content = '{"type":"PLAN","goal_restatement":"a \\" NaN",}';
+    const v = checkSchema({ kind: "plan", content });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).not.toMatch(/non-finite numbers/i);
+    expect(v.rationale).toMatch(/JSON/);
+  });
+
+  it("still detects a bare NaN after a string ending in an escaped backslash", () => {
+    // Raw JSON text: {"type":"PLAN","x":"a\\","y": NaN} — the value of "x" is
+    // the one-character string `a\` (escaped trailing backslash); the
+    // stripping regex must consume that escape pair and not let it eat past
+    // the closing quote, or it would mis-parse the rest of the document.
+    const content = '{"type":"PLAN","x":"a\\\\","y": NaN}';
+    const v = checkSchema({ kind: "plan", content });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/non-finite numbers/i);
+  });
+
+  it("returns a deny quickly (<1s) without throwing on 200,000 alternating quote/backslash characters", () => {
+    const content = '\\"'.repeat(100_000);
+    const started = Date.now();
+    let v: ReturnType<typeof checkSchema>;
+    expect(() => {
+      v = checkSchema({ kind: "plan", content });
+    }).not.toThrow();
+    expect(v!.outcome).toBe("deny");
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it("gives plan denials a plan-specific suggested_fix, not the frontmatter remediation text", () => {
     const v = checkSchema({ kind: "plan", content: "{not json" });
     expect(v.outcome).toBe("deny");
@@ -506,6 +546,70 @@ describe("X2 — plan artifact kind + checkPlan validator", () => {
     expect(v.rationale).toMatch(/cycle/);
     expect(v.rationale.length).toBeLessThan(2000);
     expect(v.rationale).not.toContain(longId);
+  });
+
+  describe("cross-vendor critique gpt-5.6-terra: rationale bounds/escaping + true cycle membership", () => {
+    // A newline near the front (inside the 64-char truncation window) plus a
+    // 100,000-char tail — proves both truncation (the tail must not survive)
+    // and JSON-escaping (the newline must not survive as a raw newline).
+    const HUGE = 'line1\nline2-' + "x".repeat(100_000);
+
+    function assertBoundedDeny(v: ReturnType<typeof checkSchema>): void {
+      expect(v.outcome).toBe("deny");
+      expect(v.rationale.length).toBeLessThan(2000);
+      expect(v.rationale).not.toContain("\n");
+    }
+
+    it("bounds/escapes a huge newline-bearing step_id on the duplicate-step_id path", () => {
+      const plan = withSteps([step({ step_id: HUGE }), step({ step_id: HUGE })]);
+      assertBoundedDeny(checkSchema({ kind: "plan", content: JSON.stringify(plan) }));
+    });
+
+    it("bounds/escapes a huge newline-bearing step_id on the self-dependency path", () => {
+      const plan = withSteps([step({ step_id: HUGE, depends_on: [HUGE] })]);
+      assertBoundedDeny(checkSchema({ kind: "plan", content: JSON.stringify(plan) }));
+    });
+
+    it("bounds/escapes a huge newline-bearing dependency target on the dangling-dependency path", () => {
+      const plan = withSteps([step({ step_id: "s1", depends_on: [HUGE] })]);
+      assertBoundedDeny(checkSchema({ kind: "plan", content: JSON.stringify(plan) }));
+    });
+
+    it("bounds/escapes a huge newline-bearing step_id on the missing-required-field path", () => {
+      const plan = withSteps([step({ step_id: HUGE, target_squad: "" })]);
+      assertBoundedDeny(checkSchema({ kind: "plan", content: JSON.stringify(plan) }));
+    });
+
+    it("bounds/escapes a huge newline-bearing step_id on the zero-acceptance-criteria path", () => {
+      const plan = { ...VALID_PLAN, rigor: "major", steps: [step({ step_id: HUGE, acceptance_criteria: [] })] };
+      assertBoundedDeny(checkSchema({ kind: "plan", content: JSON.stringify(plan) }));
+    });
+
+    it("bounds/escapes a huge newline-bearing rigor value", () => {
+      const plan = { ...VALID_PLAN, rigor: HUGE };
+      assertBoundedDeny(checkSchema({ kind: "plan", content: JSON.stringify(plan) }));
+    });
+
+    it("bounds/escapes a huge newline-bearing type value", () => {
+      const plan = { ...VALID_PLAN, type: HUGE };
+      assertBoundedDeny(checkSchema({ kind: "plan", content: JSON.stringify(plan) }));
+    });
+
+    it("reports only the true cyclic members (a,b) and not a step that merely depends on the cycle (c)", () => {
+      // a -> b -> a is a genuine 2-cycle; c -> a merely depends on the cycle
+      // and is never itself drained by Kahn's algorithm, but it is NOT part
+      // of any cycle.
+      const plan = withSteps([
+        step({ step_id: "a", depends_on: ["b"] }),
+        step({ step_id: "b", depends_on: ["a"] }),
+        step({ step_id: "c", depends_on: ["a"] }),
+      ]);
+      const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+      expect(v.outcome).toBe("deny");
+      expect(v.rationale).toMatch(/"a"/);
+      expect(v.rationale).toMatch(/"b"/);
+      expect(v.rationale).not.toMatch(/"c"/);
+    });
   });
 
   describe("exception-to-deny wrapper", () => {
