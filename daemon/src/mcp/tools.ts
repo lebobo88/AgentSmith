@@ -254,7 +254,7 @@ export function registerTools(kernel: SmithKernel): ToolMap {
     },
     {
       name: "agentsmith.keymaker.scan",
-      description: "Scan one or all consumer projects for installed agents/skills/commands/hooks/teams/squads/rubrics.",
+      description: "Scan one or all consumer projects for installed agents/skills/commands/hooks/teams/squads/rubrics/plan artifacts (docs/plans/*.json).",
       inputSchema: z.object({ project: ConsumerProjectSchema.optional() }),
       handler: async (args) => {
         const a = args as { project?: any };

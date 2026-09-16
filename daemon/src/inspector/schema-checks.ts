@@ -313,6 +313,45 @@ function stepLabel(step: Record<string, unknown>, idx: number): string {
   return typeof id === "string" && id.trim().length > 0 ? `"${id}"` : `step[${idx}]`;
 }
 
+// POLICY: plan artifacts must be strict RFC 8259 JSON. Python's `json.dumps`
+// (the serializer behind Hydra's `render_plan_json`) emits bare `NaN`,
+// `Infinity`, and `-Infinity` tokens for non-finite floats by default — e.g.
+// a `Constraints.budget_usd` or `PlanStep.estimated_budget_usd` that was set
+// to `float("nan")`. Those tokens are NOT valid JSON (RFC 8259 numbers are
+// finite only), so `JSON.parse` already rejects them. This check exists
+// solely to give that rejection a specific, actionable rationale instead of
+// the generic "not valid JSON" message, so the fix is obvious: re-serialize
+// with finite numbers (or a JSON-legal string/null placeholder), not "make
+// this parser accept NaN".
+const BARE_NON_FINITE_TOKEN = /\b(?:NaN|Infinity)\b/;
+
+/** True if `content` contains a bare (unquoted) NaN/Infinity/-Infinity token
+ * outside of any JSON string literal. Strips well-formed JSON string
+ * literals first (handling `\"` and other backslash escapes) so a string
+ * value that merely contains the word "NaN" is not flagged. */
+function hasBareNonFiniteToken(content: string): boolean {
+  const withoutStrings = content.replace(/"(?:\\.|[^"\\])*"/g, '""');
+  return BARE_NON_FINITE_TOKEN.test(withoutStrings);
+}
+
+const MAX_IDS_IN_RATIONALE = 10;
+const MAX_ID_LENGTH_IN_RATIONALE = 64;
+
+/** Render a bounded, JSON-escaped list of step ids for a deny rationale.
+ * Denial rationales are surfaced verbatim (logs, HITL tickets, CLI output);
+ * an unbounded or adversarially long step_id must never be allowed to blow
+ * up a rationale string. At most `MAX_IDS_IN_RATIONALE` ids are shown, each
+ * truncated to `MAX_ID_LENGTH_IN_RATIONALE` characters, and any remainder is
+ * summarized as a count rather than dropped silently. */
+function formatIdListBounded(ids: readonly string[]): string {
+  const shown = ids.slice(0, MAX_IDS_IN_RATIONALE).map((id) => {
+    const truncated = id.length > MAX_ID_LENGTH_IN_RATIONALE ? `${id.slice(0, MAX_ID_LENGTH_IN_RATIONALE)}…` : id;
+    return JSON.stringify(truncated);
+  });
+  const remaining = ids.length - shown.length;
+  return remaining > 0 ? `${shown.join(", ")}, and ${remaining} more` : shown.join(", ");
+}
+
 function checkPlan(content: string, now: string): SmithVerdict {
   try {
     return checkPlanInner(content, now);
@@ -332,6 +371,15 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
   try {
     parsed = JSON.parse(content);
   } catch (err) {
+    if (hasBareNonFiniteToken(content)) {
+      return failPlanVerdict(
+        now,
+        "plan artifact is not valid JSON: contains a bare NaN/Infinity/-Infinity token " +
+          "(policy: plan JSON must be strict RFC 8259 JSON — non-finite numbers are " +
+          "unsupported in plan JSON; re-serialize with finite numbers or a JSON-legal " +
+          "string/null placeholder)",
+      );
+    }
     return failPlanVerdict(now, `plan artifact is not valid JSON: ${String(err)}`);
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -517,7 +565,7 @@ function checkPlanInner(content: string, now: string): SmithVerdict {
   if (remaining.length > 0) {
     return failPlanVerdict(
       now,
-      `plan has a dependency cycle among steps: ${remaining.sort().join(", ")}`,
+      `plan has a dependency cycle among steps: ${formatIdListBounded(remaining.sort())}`,
     );
   }
 

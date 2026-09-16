@@ -411,6 +411,50 @@ describe("X2 — plan artifact kind + checkPlan validator", () => {
     expect(v.rationale).toMatch(/step\[1\]/);
   });
 
+  it("denies a Python-style bare NaN with a rationale naming non-finite numbers as unsupported", () => {
+    // `json.dumps({"estimated_budget_usd": float("nan")})` emits this exact
+    // (invalid-per-RFC-8259) text — Python's json.dumps is NaN/Infinity
+    // permissive by default while JSON.parse is not.
+    const content = '{"type":"PLAN","estimated_budget_usd": NaN}';
+    const v = checkSchema({ kind: "plan", content });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/non-finite numbers/i);
+    expect(v.rationale).toMatch(/unsupported/i);
+    expect(v.rationale).toMatch(/strict JSON|RFC 8259/i);
+  });
+
+  it("denies a Python-style bare Infinity with a rationale naming non-finite numbers as unsupported", () => {
+    const content = '{"type":"PLAN","constraints":{"budget_usd": Infinity}}';
+    const v = checkSchema({ kind: "plan", content });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/non-finite numbers/i);
+    expect(v.rationale).toMatch(/unsupported/i);
+  });
+
+  it("denies a Python-style bare -Infinity with a rationale naming non-finite numbers as unsupported", () => {
+    const content = '{"type":"PLAN","constraints":{"budget_usd": -Infinity}}';
+    const v = checkSchema({ kind: "plan", content });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/non-finite numbers/i);
+    expect(v.rationale).toMatch(/unsupported/i);
+  });
+
+  it("does not misclassify a plan whose string value merely contains the word 'NaN' as non-finite", () => {
+    // Still invalid JSON (trailing comma), but for a different reason — the
+    // NaN-specific rationale must not fire just because the word appears
+    // inside a properly-closed string literal.
+    const content = '{"type":"PLAN","goal_restatement":"the field is NaN today",}';
+    const v = checkSchema({ kind: "plan", content });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).not.toMatch(/non-finite numbers/i);
+  });
+
+  it("allows a plan whose string value merely contains the word 'NaN' when the JSON is otherwise well-formed", () => {
+    const plan = { ...VALID_PLAN, summary: "field named NaN is out of scope for this plan" };
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("allow");
+  });
+
   it("gives plan denials a plan-specific suggested_fix, not the frontmatter remediation text", () => {
     const v = checkSchema({ kind: "plan", content: "{not json" });
     expect(v.outcome).toBe("deny");
@@ -445,6 +489,23 @@ describe("X2 — plan artifact kind + checkPlan validator", () => {
     }).not.toThrow();
     expect(v!.outcome).toBe("deny");
     expect(v!.rationale).toMatch(/cycle/);
+    // Bounded rationale: at most 10 step ids are listed, the rationale stays
+    // well under a runaway 20,000-id join, and the remaining count is named.
+    expect(v!.rationale.length).toBeLessThan(2000);
+    expect(v!.rationale).toMatch(/and 19990 more/);
+  });
+
+  it("truncates a very long step id (10,000 chars) in a cycle rationale", () => {
+    const longId = "s".repeat(10_000);
+    const plan = withSteps([
+      step({ step_id: longId, depends_on: ["s2"] }),
+      step({ step_id: "s2", depends_on: [longId] }),
+    ]);
+    const v = checkSchema({ kind: "plan", content: JSON.stringify(plan) });
+    expect(v.outcome).toBe("deny");
+    expect(v.rationale).toMatch(/cycle/);
+    expect(v.rationale.length).toBeLessThan(2000);
+    expect(v.rationale).not.toContain(longId);
   });
 
   describe("exception-to-deny wrapper", () => {
