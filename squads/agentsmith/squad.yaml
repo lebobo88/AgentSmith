@@ -74,12 +74,12 @@ accepts:
   - DECISION_RECORD
   - META_PROPOSAL
   - JUDGE_VERDICT
-  - Handoff
+  - HANDOFF
 
 emits:
   - DECISION_RECORD
   - HITL_REQUEST
-  - Handoff
+  - HANDOFF
   - META_PROPOSAL
 
 gates:
