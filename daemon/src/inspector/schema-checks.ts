@@ -49,6 +49,9 @@ export function checkSchema(input: SchemaCheckInput): SmithVerdict {
   if (input.kind === "adr") {
     return checkAdr(input.content, now);
   }
+  if (input.kind === "plan") {
+    return checkPlan(input.content, now);
+  }
 
   const schema = PROJECT_SCHEMAS[project]?.[input.kind];
   if (!schema) {
@@ -248,6 +251,512 @@ function checkAdr(content: string, now: string): SmithVerdict {
   );
 }
 
+/**
+ * Plan artifact validator.
+ *
+ * Validates the JSON companion Hydra writes for its `PLAN` envelope
+ * (`hydra_core/plan_artifact.py::render_plan_json`, i.e.
+ * `Plan.model_dump(mode="json")` from `hydra_core/schemas.py::Plan` /
+ * `PlanStep`). This does NOT duplicate Hydra's `envelope_type` registry
+ * (`SCHEMA_REGISTRY`) — a step's `envelope_type` is only checked for being a
+ * non-empty string here; Hydra's own `PlanStep._known_type` validator is the
+ * source of truth for which envelope types actually exist.
+ *
+ * Deny rules (fail-closed, N7). Some of these mirror Hydra's Pydantic schema
+ * exactly (a value Hydra itself would reject at construction); others are a
+ * deliberately STRICTER governance policy layered on top of a schema-valid
+ * document. Each rule below is labeled accordingly:
+ *   - content is not valid JSON, or not a JSON object                 [shape]
+ *   - type !== "PLAN"                                                 [schema]
+ *   - rigor is not one of trivial | standard | major                  [schema]
+ *   - goal_restatement, summary, or a step identity field (step_id,
+ *     target_squad, envelope_type, description) is missing, empty, or
+ *     whitespace-only                                                 [policy:
+ *     Hydra's Pydantic `str` accepts "   " unchanged; a whitespace-only
+ *     identity/summary field is syntactically valid but not reviewable]
+ *   - steps is not an array                                           [schema]
+ *   - a step is not a JSON object (denial names its array index)      [shape]
+ *   - a step's depends_on is present and not an array, or contains a
+ *     non-string / empty-string entry                                 [schema:
+ *     Hydra's PlanStep.depends_on is `list[str]`]
+ *   - a step's acceptance_criteria is present and not an array of
+ *     strings                                                         [schema:
+ *     Hydra's PlanStep.acceptance_criteria is `list[str]`]
+ *   - duplicate step_id                                                [schema]
+ *   - a depends_on entry names no known step, names its own step, or the
+ *     depends_on graph contains a cycle (iterative Kahn's algorithm,
+ *     mirroring `Plan._validate_dag`)                                  [schema]
+ *   - plan_revision is present and is not an integer >= 1               [schema]
+ *   - rigor is standard/major and some step has zero acceptance_criteria
+ *     [POLICY, NOT SCHEMA: Hydra's `PlanStep.acceptance_criteria` defaults to
+ *     an empty list at ANY rigor — a Hydra-schema-valid standard/major plan
+ *     with an empty criteria list on a step is denied here ON PURPOSE. This
+ *     is the plan-critic governance rule (acceptance criteria >= 1 enforced;
+ *     the plan critic never blesses a step without one), intentionally
+ *     stricter than what Hydra's Pydantic model itself requires.]
+ *
+ * Step/id lookups throughout use Map/Set keying (never plain-object property
+ * access), so reserved-looking step ids such as "__proto__", "constructor",
+ * or "toString" behave exactly like any other id.
+ *
+ * Any unexpected exception inside this validator is caught by the outer
+ * `checkPlan` wrapper and converted to an N7 deny rather than escaping as a
+ * thrown error.
+ */
+const PLAN_RIGOR_VALUES = ["trivial", "standard", "major"] as const;
+
+const MAX_VALUE_LENGTH_IN_RATIONALE = 64;
+
+/**
+ * Render ANY single value echoed from untrusted plan input (a step id, a
+ * depends_on target, a rigor/type/plan_revision value, etc.) for a deny
+ * rationale. This is the ONE formatter every echoed value in this file must
+ * go through before it is interpolated into a rationale string:
+ *   - truncated to MAX_VALUE_LENGTH_IN_RATIONALE characters, so an
+ *     adversarially long value (e.g. a 100 MB step_id) cannot blow up
+ *     rationale length or downstream log/HITL storage;
+ *   - JSON-escaped (via JSON.stringify of the truncated value), so a
+ *     newline-containing value cannot forge new lines in logs/HITL output,
+ *     and the value is unambiguously delimited from the surrounding text.
+ * Rationales are surfaced verbatim (logs, HITL tickets, CLI output) — never
+ * interpolate a raw echoed value directly.
+ */
+function formatEchoedValue(v: unknown): string {
+  let s: string;
+  if (typeof v === "string") {
+    s = v;
+  } else {
+    try {
+      const encoded = JSON.stringify(v);
+      s = encoded === undefined ? String(v) : encoded;
+    } catch {
+      s = String(v);
+    }
+  }
+  const truncated =
+    s.length > MAX_VALUE_LENGTH_IN_RATIONALE ? `${s.slice(0, MAX_VALUE_LENGTH_IN_RATIONALE)}…` : s;
+  return JSON.stringify(truncated);
+}
+
+/** Human-readable label for a step in a deny rationale: its step_id when
+ * usable, otherwise its array index (e.g. for a step with a missing/blank
+ * step_id, or a step that isn't even an object yet). Routed through
+ * `formatEchoedValue` — a step_id is untrusted input. */
+function stepLabel(step: Record<string, unknown>, idx: number): string {
+  const id = step["step_id"];
+  return typeof id === "string" && id.trim().length > 0 ? formatEchoedValue(id) : `step[${idx}]`;
+}
+
+// POLICY: plan artifacts must be strict RFC 8259 JSON. Python's `json.dumps`
+// (the serializer behind Hydra's `render_plan_json`) emits bare `NaN`,
+// `Infinity`, and `-Infinity` tokens for non-finite floats by default — e.g.
+// a `Constraints.budget_usd` or `PlanStep.estimated_budget_usd` that was set
+// to `float("nan")`. Those tokens are NOT valid JSON (RFC 8259 numbers are
+// finite only), so `JSON.parse` already rejects them. This check exists
+// solely to give that rejection a specific, actionable rationale instead of
+// the generic "not valid JSON" message, so the fix is obvious: re-serialize
+// with finite numbers (or a JSON-legal string/null placeholder), not "make
+// this parser accept NaN".
+const NON_FINITE_TOKENS = ["NaN", "Infinity"] as const;
+
+/** True if `ch` can extend an identifier/number token (used for word-boundary
+ * checks around a candidate NaN/Infinity match). */
+function isWordChar(ch: string): boolean {
+  return /[A-Za-z0-9_]/.test(ch);
+}
+
+/** True if `content` contains a bare (unquoted) NaN/Infinity/-Infinity token
+ * outside of any JSON string literal.
+ *
+ * This is a single linear (O(n)) left-to-right scan that tracks whether the
+ * cursor is inside a JSON string literal (honoring backslash escapes,
+ * including an escaped backslash immediately before a closing quote), rather
+ * than a regex-based "strip strings, then test" approach. A prior
+ * regex-based implementation (`/"(?:\\.|[^"\\])*"/g`) was quadratic on
+ * adversarial input — e.g. ~200,000 alternating `\` / `"` characters, which
+ * never close a string, forced the engine to retry the unterminated-string
+ * match from every subsequent quote — taking upward of 15s. The manual scan
+ * below is immune to that: no backtracking, exactly one pass. */
+function hasBareNonFiniteToken(content: string): boolean {
+  let inString = false;
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i];
+    if (inString) {
+      if (c === "\\") {
+        i++; // the following character is escaped; never treat it as a closing quote
+      } else if (c === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inString = true;
+      continue;
+    }
+    for (const token of NON_FINITE_TOKENS) {
+      if (content.startsWith(token, i)) {
+        const before = i > 0 ? content[i - 1]! : "";
+        const after = content[i + token.length] ?? "";
+        if (!isWordChar(before) && !isWordChar(after)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+const MAX_IDS_IN_RATIONALE = 10;
+
+/** Render a bounded list of step ids for a deny rationale, each rendered via
+ * `formatEchoedValue` (truncated + JSON-escaped). Denial rationales are
+ * surfaced verbatim (logs, HITL tickets, CLI output); an unbounded list of
+ * ids must never be allowed to blow up a rationale string. At most
+ * `MAX_IDS_IN_RATIONALE` ids are shown, and any remainder is summarized as a
+ * count rather than dropped silently. */
+function formatIdListBounded(ids: readonly string[]): string {
+  const shown = ids.slice(0, MAX_IDS_IN_RATIONALE).map((id) => formatEchoedValue(id));
+  const remaining = ids.length - shown.length;
+  return remaining > 0 ? `${shown.join(", ")}, and ${remaining} more` : shown.join(", ");
+}
+
+/**
+ * Compute the true cyclic members of a dependency graph, restricted to the
+ * `remaining` (Kahn-residual) step ids. Kahn's residual set over-reports: a
+ * step that merely DEPENDS ON a cycle (but is not itself on the cycle) is
+ * also left undrained (e.g. `c` depends on `a` in `a<->b` plus `c->a`), so
+ * naming the whole residual as "the cycle" is wrong. This computes strongly
+ * connected components (iterative Tarjan's algorithm — no recursion, so a
+ * plan with tens of thousands of steps cannot overflow the call stack) over
+ * the induced subgraph on `remaining`, and returns the union of every SCC of
+ * size > 1 (a size-1 SCC is not a cycle; true self-dependencies are already
+ * denied earlier and never reach this function).
+ */
+function findCyclicStepIds(
+  remaining: readonly string[],
+  dependsOnByStep: ReadonlyMap<string, readonly string[]>,
+): string[] {
+  const remainingSet = new Set(remaining);
+  const edgesOf = (id: string): string[] => (dependsOnByStep.get(id) ?? []).filter((d) => remainingSet.has(d));
+
+  const index = new Map<string, number>();
+  const lowlink = new Map<string, number>();
+  const onStack = new Set<string>();
+  const tarjanStack: string[] = [];
+  const cyclic = new Set<string>();
+  let counter = 0;
+
+  interface Frame {
+    node: string;
+    edges: string[];
+    edgeIdx: number;
+  }
+
+  for (const start of remaining) {
+    if (index.has(start)) continue;
+    const work: Frame[] = [{ node: start, edges: edgesOf(start), edgeIdx: 0 }];
+    index.set(start, counter);
+    lowlink.set(start, counter);
+    counter++;
+    tarjanStack.push(start);
+    onStack.add(start);
+
+    while (work.length > 0) {
+      const frame = work[work.length - 1]!;
+      if (frame.edgeIdx < frame.edges.length) {
+        const next = frame.edges[frame.edgeIdx]!;
+        frame.edgeIdx++;
+        if (!index.has(next)) {
+          index.set(next, counter);
+          lowlink.set(next, counter);
+          counter++;
+          tarjanStack.push(next);
+          onStack.add(next);
+          work.push({ node: next, edges: edgesOf(next), edgeIdx: 0 });
+        } else if (onStack.has(next)) {
+          lowlink.set(frame.node, Math.min(lowlink.get(frame.node)!, index.get(next)!));
+        }
+      } else {
+        work.pop();
+        const parent = work[work.length - 1];
+        if (parent) {
+          lowlink.set(parent.node, Math.min(lowlink.get(parent.node)!, lowlink.get(frame.node)!));
+        }
+        if (lowlink.get(frame.node) === index.get(frame.node)) {
+          const component: string[] = [];
+          let member: string;
+          do {
+            member = tarjanStack.pop()!;
+            onStack.delete(member);
+            component.push(member);
+          } while (member !== frame.node);
+          if (component.length > 1) {
+            for (const m of component) cyclic.add(m);
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(cyclic);
+}
+
+function checkPlan(content: string, now: string): SmithVerdict {
+  try {
+    return checkPlanInner(content, now);
+  } catch (err) {
+    // Fail-closed: a bug in this validator (or a pathological input it
+    // doesn't anticipate) must never escape as a thrown error — it becomes
+    // an N7 deny, just like every other rule violation above.
+    return failPlanVerdict(
+      now,
+      `plan artifact validation raised an unexpected error: ${String(err)}`,
+    );
+  }
+}
+
+function checkPlanInner(content: string, now: string): SmithVerdict {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err) {
+    if (hasBareNonFiniteToken(content)) {
+      return failPlanVerdict(
+        now,
+        "plan artifact is not valid JSON: contains a bare NaN/Infinity/-Infinity token " +
+          "(policy: plan JSON must be strict RFC 8259 JSON — non-finite numbers are " +
+          "unsupported in plan JSON; re-serialize with finite numbers or a JSON-legal " +
+          "string/null placeholder)",
+      );
+    }
+    return failPlanVerdict(now, `plan artifact is not valid JSON: ${String(err)}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return failPlanVerdict(now, "plan artifact must be a JSON object");
+  }
+  const plan = parsed as Record<string, unknown>;
+
+  if (plan["type"] !== "PLAN") {
+    return failPlanVerdict(
+      now,
+      `plan artifact field "type" must be "PLAN", got ${formatEchoedValue(plan["type"])}`,
+    );
+  }
+
+  const rigor = plan["rigor"];
+  if (typeof rigor !== "string" || !(PLAN_RIGOR_VALUES as readonly string[]).includes(rigor)) {
+    return failPlanVerdict(
+      now,
+      `plan artifact field "rigor" must be one of ${PLAN_RIGOR_VALUES.join(", ")}, got ${formatEchoedValue(rigor)}`,
+    );
+  }
+
+  // Policy: whitespace-only is not reviewable, even though Hydra's Pydantic
+  // `str` type would accept it unchanged.
+  const goalRestatement = plan["goal_restatement"];
+  if (typeof goalRestatement !== "string" || goalRestatement.trim().length === 0) {
+    return failPlanVerdict(
+      now,
+      "plan artifact field \"goal_restatement\" is missing or empty (policy: whitespace-only is not reviewable)",
+    );
+  }
+
+  const summary = plan["summary"];
+  if (typeof summary !== "string" || summary.trim().length === 0) {
+    return failPlanVerdict(
+      now,
+      "plan artifact field \"summary\" is missing or empty (policy: whitespace-only is not reviewable)",
+    );
+  }
+
+  const steps = plan["steps"];
+  if (!Array.isArray(steps)) {
+    return failPlanVerdict(now, "plan artifact field \"steps\" must be an array");
+  }
+
+  // ---- Single indexed pass: per-step shape validation. ----
+  const stepIds: string[] = [];
+  const dependsOnByStep = new Map<string, string[]>();
+  const acceptanceCountByStep = new Map<string, number>();
+
+  for (let idx = 0; idx < steps.length; idx++) {
+    const raw = steps[idx];
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return failPlanVerdict(now, `plan artifact step[${idx}] is not a JSON object`);
+    }
+    const step = raw as Record<string, unknown>;
+    const label = stepLabel(step, idx);
+
+    for (const field of ["step_id", "target_squad", "envelope_type", "description"] as const) {
+      const v = step[field];
+      if (typeof v !== "string" || v.trim().length === 0) {
+        return failPlanVerdict(
+          now,
+          `plan step ${label} is missing required non-empty string field "${field}" ` +
+            "(policy: whitespace-only is not reviewable)",
+        );
+      }
+    }
+    const stepId = step["step_id"] as string;
+
+    // depends_on: Hydra's PlanStep.depends_on is `list[str]`. A non-array,
+    // or an array with a non-string / empty-string entry, is a value Hydra
+    // itself cannot construct — deny, do not silently coerce.
+    const dependsOnRaw = step["depends_on"];
+    let dependsOn: string[];
+    if (dependsOnRaw === undefined) {
+      dependsOn = [];
+    } else if (!Array.isArray(dependsOnRaw)) {
+      return failPlanVerdict(
+        now,
+        `plan step ${label} field "depends_on" must be an array, got ${typeof dependsOnRaw}`,
+      );
+    } else {
+      dependsOn = [];
+      for (const d of dependsOnRaw) {
+        if (typeof d !== "string" || d.trim().length === 0) {
+          return failPlanVerdict(
+            now,
+            `plan step ${label} field "depends_on" must contain only non-empty step_id strings, ` +
+              `got ${formatEchoedValue(d)}`,
+          );
+        }
+        dependsOn.push(d);
+      }
+    }
+
+    // acceptance_criteria: also `list[str]` in Hydra's schema.
+    const criteriaRaw = step["acceptance_criteria"];
+    let criteriaCount = 0;
+    if (criteriaRaw !== undefined) {
+      if (!Array.isArray(criteriaRaw)) {
+        return failPlanVerdict(
+          now,
+          `plan step ${label} field "acceptance_criteria" must be an array of strings, ` +
+            `got ${typeof criteriaRaw}`,
+        );
+      }
+      for (const c of criteriaRaw) {
+        if (typeof c !== "string") {
+          return failPlanVerdict(
+            now,
+            `plan step ${label} field "acceptance_criteria" must be an array of strings, ` +
+              "got a non-string entry",
+          );
+        }
+      }
+      criteriaCount = criteriaRaw.length;
+    }
+
+    stepIds.push(stepId);
+    dependsOnByStep.set(stepId, dependsOn);
+    acceptanceCountByStep.set(stepId, criteriaCount);
+  }
+
+  // Duplicate step_id. Map/Set keying throughout — safe for reserved-looking
+  // ids like "__proto__" / "constructor" / "toString".
+  const knownIds = new Set<string>();
+  for (const id of stepIds) {
+    if (knownIds.has(id)) {
+      return failPlanVerdict(now, `plan step ${formatEchoedValue(id)} is a duplicate step_id`);
+    }
+    knownIds.add(id);
+  }
+
+  // Dependency validity: self-dependency + dangling refs.
+  for (const id of stepIds) {
+    const dependsOn = dependsOnByStep.get(id) ?? [];
+    if (dependsOn.includes(id)) {
+      return failPlanVerdict(now, `plan step ${formatEchoedValue(id)} depends on itself`);
+    }
+    for (const dep of dependsOn) {
+      if (!knownIds.has(dep)) {
+        return failPlanVerdict(
+          now,
+          `plan step ${formatEchoedValue(id)} depends on unknown step_id ${formatEchoedValue(dep)} (dangling dependency)`,
+        );
+      }
+    }
+  }
+
+  // Cycle detection: iterative Kahn's algorithm (mirrors
+  // `hydra_core/schemas.py::Plan._validate_dag`) — repeatedly drain nodes
+  // with in-degree 0; anything left over is part of a cycle. Iterative, not
+  // recursive DFS, so a deep acyclic chain (thousands of steps) cannot
+  // overflow the call stack.
+  const inDegree = new Map<string, number>();
+  const dependents = new Map<string, string[]>();
+  for (const id of stepIds) {
+    inDegree.set(id, 0);
+    dependents.set(id, []);
+  }
+  for (const id of stepIds) {
+    for (const dep of dependsOnByStep.get(id) ?? []) {
+      inDegree.set(id, (inDegree.get(id) ?? 0) + 1);
+      dependents.get(dep)!.push(id);
+    }
+  }
+  const queue: string[] = [];
+  for (const id of stepIds) {
+    if ((inDegree.get(id) ?? 0) === 0) queue.push(id);
+  }
+  const drained = new Set<string>();
+  while (queue.length > 0) {
+    const id = queue.pop()!;
+    drained.add(id);
+    for (const nxt of dependents.get(id) ?? []) {
+      const deg = (inDegree.get(nxt) ?? 0) - 1;
+      inDegree.set(nxt, deg);
+      if (deg === 0) queue.push(nxt);
+    }
+  }
+  const remaining = stepIds.filter((id) => !drained.has(id));
+  if (remaining.length > 0) {
+    // Kahn's residual over-reports: it also includes steps that merely
+    // depend (possibly transitively) on a cycle without being part of one
+    // themselves. Narrow to the true cyclic members via SCC before naming
+    // anyone in the rationale.
+    const cyclicIds = findCyclicStepIds(remaining, dependsOnByStep).sort();
+    return failPlanVerdict(
+      now,
+      `plan has a dependency cycle among steps: ${formatIdListBounded(cyclicIds)}`,
+    );
+  }
+
+  // plan_revision, if present, must be an integer >= 1.
+  if ("plan_revision" in plan) {
+    const rev = plan["plan_revision"];
+    if (typeof rev !== "number" || !Number.isInteger(rev) || rev < 1) {
+      return failPlanVerdict(
+        now,
+        `plan artifact field "plan_revision" must be an integer >= 1, got ${formatEchoedValue(rev)}`,
+      );
+    }
+  }
+
+  // GOVERNANCE POLICY, stricter than Hydra's schema (see doc comment above):
+  // the plan critic never blesses a step without an acceptance criterion at
+  // standard/major rigor, even though a Hydra-schema-valid Plan permits an
+  // empty acceptance_criteria list at any rigor.
+  if (rigor === "standard" || rigor === "major") {
+    for (const id of stepIds) {
+      const count = acceptanceCountByStep.get(id) ?? 0;
+      if (count === 0) {
+        return failPlanVerdict(
+          now,
+          `plan step ${formatEchoedValue(id)} has zero acceptance_criteria — governance policy ` +
+            `(stricter than Hydra's schema) requires >= 1 at rigor=${formatEchoedValue(rigor)}`,
+        );
+      }
+    }
+  }
+
+  return passVerdict(
+    now,
+    `plan conforms to the Hydra PLAN envelope (rigor=${rigor}, ${steps.length} step(s))`,
+  );
+}
+
 function passVerdict(decided_at: string, rationale: string): SmithVerdict {
   return {
     outcome: "allow",
@@ -265,6 +774,27 @@ function failVerdict(decided_at: string, rationale: string): SmithVerdict {
     cited_invariants: ["N7"],
     suggested_fix:
       "restore conforming frontmatter; see .claude/skills/cross-project-conventions/SKILL.md in the AgentSmith repo",
+    evidence: [],
+    decided_at,
+  };
+}
+
+/**
+ * Plan-specific deny verdict. `failVerdict`'s `suggested_fix` talks about
+ * "conforming frontmatter", which is meaningless for a JSON plan artifact
+ * (plans have no `---` frontmatter fence at all) — this points at Hydra's
+ * actual Plan schema and a worked example instead.
+ */
+function failPlanVerdict(decided_at: string, rationale: string): SmithVerdict {
+  return {
+    outcome: "deny",
+    rationale,
+    cited_invariants: ["N7"],
+    suggested_fix:
+      "fix the plan JSON companion to match Hydra's Plan schema " +
+      "(hydra_core/schemas.py::Plan / PlanStep, rendered by " +
+      "hydra_core/plan_artifact.py::render_plan_json) — see docs/plans/*.json " +
+      "in the Hydra repo for a worked example.",
     evidence: [],
     decided_at,
   };

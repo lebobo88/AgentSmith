@@ -20,3 +20,5 @@ Thumbs.db
 # Generated / cache
 *.log
 .cache/
+.harness/
+.hydra/
